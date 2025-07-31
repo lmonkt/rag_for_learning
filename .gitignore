@@ -1,0 +1,11 @@
+# IDE
+.idea/
+*.iml
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.pytest_cache/
+.coverage
+.python-version

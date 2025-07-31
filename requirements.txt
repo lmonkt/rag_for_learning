@@ -1,0 +1,21 @@
+# 核心依赖
+gradio==5.31.0
+pdfminer.six==20250506
+sentence-transformers==3.4.0
+faiss-cpu
+langchain-text-splitters==0.3.8
+python-dotenv==1.1.0
+requests>=2.31.0
+markdown>=3.4.3
+fastapi>=0.104.1
+uvicorn>=0.23.2
+python-multipart==0.0.20
+urllib3==2.1.0
+jieba>=0.42.1
+pydantic==2.11.5
+
+# PDF处理相关
+
+# 工具依赖
+numpy>=1.26.1
+rank-bm25>=0.2.2
