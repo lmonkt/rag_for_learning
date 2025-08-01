@@ -413,10 +413,22 @@ def create_ui():
                     # 左侧操作面板
                     with gr.Column(scale=5):
                         gr.Markdown("## 📂 文档处理区")
-                        file_input = gr.File(label="上传PDF文档", file_types=[".pdf"], file_count="multiple")
-                        upload_btn = gr.Button("🚀 开始处理", variant="primary")
+                        with gr.Tabs():
+                            with gr.TabItem("📁 文件上传"):
+                                file_input = gr.File(label="上传文档", file_types=[".pdf", ".txt", ".docx", ".md", ".xlsx", ".xls"], file_count="multiple")
+                                upload_btn = gr.Button("🚀 开始处理文件", variant="primary")
+                            
+                            with gr.TabItem("🌐 网页内容"):
+                                url_input = gr.Textbox(label="输入网页URL", placeholder="https://example.com/article")
+                                url_btn = gr.Button("🌐 提取网页内容", variant="primary")
+                            
+                            with gr.TabItem("🔗 API接口"):
+                                api_url_input = gr.Textbox(label="API端点URL", placeholder="https://api.example.com/data")
+                                api_headers_input = gr.Textbox(label="请求头 (JSON格式, 可选)", placeholder='{"Authorization": "Bearer token"}', lines=2)
+                                api_btn = gr.Button("🔗 提取API数据", variant="primary")
+                        
                         upload_status = gr.Textbox(label="处理状态", interactive=False, lines=2)
-                        file_list = gr.Textbox(label="已处理文件", interactive=False, lines=3)
+                        file_list = gr.Textbox(label="已处理数据源", interactive=False, lines=3)
 
                         gr.Markdown("## ❓ 提问区")
                         question_input = gr.Textbox(label="输入问题", lines=3, placeholder="请输入您的问题...")
@@ -467,34 +479,50 @@ def create_ui():
         # 绑定UI事件到后端逻辑
         # ----------------------------------------------------
 
-        # 1. 上传按钮点击事件
+        # 1. 文件上传按钮点击事件
         upload_btn.click(
-            fn=logic.process_uploaded_files,  # 直接调用logic中的函数
+            fn=logic.process_uploaded_files,
             inputs=[file_input],
             outputs=[upload_status, file_list],
-            show_progress="full"  # Gradio内置的进度条
+            show_progress="full"
         )
 
-        # 2. 提问按钮点击事件
+        # 2. URL内容提取按钮点击事件
+        url_btn.click(
+            fn=logic.process_url_content,
+            inputs=[url_input],
+            outputs=[upload_status, file_list],
+            show_progress="full"
+        )
+
+        # 3. API内容提取按钮点击事件
+        api_btn.click(
+            fn=logic.process_api_content,
+            inputs=[api_url_input, api_headers_input],
+            outputs=[upload_status, file_list],
+            show_progress="full"
+        )
+
+        # 4. 提问按钮点击事件
         ask_btn.click(
             fn=chat_interface,  # 调用上面定义的UI包装函数
             inputs=[question_input, chatbot, web_search_checkbox, model_choice],
             outputs=[chatbot, question_input]  # 更新chatbot，并清空输入框
         )
 
-        # 3. 回车键提问事件
+        # 5. 回车键提问事件
         question_input.submit(
             fn=chat_interface,
             inputs=[question_input, chatbot, web_search_checkbox, model_choice],
             outputs=[chatbot, question_input]
         )
 
-        # 3. 清空按钮
+        # 6. 清空按钮
         clear_btn.click(fn=lambda: None, inputs=[], outputs=[chatbot])
 
         # --- FIX: 绑定分块可视化Tab的事件 ---
 
-        # 4. 刷新分块数据按钮
+        # 7. 刷新分块数据按钮
         refresh_chunks_btn.click(
             fn=get_document_chunks_for_ui,
             inputs=[],

@@ -7,29 +7,126 @@ from pdfminer.high_level import extract_text_to_fp
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from config import CHUNK_SIZE, CHUNK_OVERLAP
 import logging
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+from docx import Document
+import markdown
 
 
-# TODO: (改进方向) 多元数据源接入
-# 思路:
-# 1. 在 `extract_text_from_file` 函数中，通过文件后缀名判断文件类型。
-# 2. 对每种类型调用不同的解析库。例如:
-#    - .txt: 直接 file.read()
-#    - .docx: 使用 `python-docx` 库
-#    - .md: 使用 `markdown` 库，甚至可以解析其结构
-# 3. 未来可以添加函数，从URL或API（如Notion）直接获取数据。
 def extract_text_from_file(filepath: str) -> str:
-    """根据文件路径提取文本内容，目前仅支持PDF。"""
-    if filepath.lower().endswith('.pdf'):
-        output = StringIO()
-        with open(filepath, 'rb') as file:
-            extract_text_to_fp(file, output)
-        return output.getvalue()
-    # 在此添加对其他文件类型的支持
-    # elif filepath.lower().endswith('.txt'):
-    #     with open(filepath, 'r', encoding='utf-8') as file:
-    #         return file.read()
-    else:
-        raise ValueError(f"不支持的文件类型: {os.path.basename(filepath)}")
+    """根据文件路径提取文本内容，支持多种文件格式。"""
+    file_extension = filepath.lower().split('.')[-1]
+    
+    try:
+        if file_extension == 'pdf':
+            output = StringIO()
+            with open(filepath, 'rb') as file:
+                extract_text_to_fp(file, output)
+            return output.getvalue()
+        
+        elif file_extension == 'txt':
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
+                return file.read()
+        
+        elif file_extension == 'docx':
+            doc = Document(filepath)
+            text = []
+            for paragraph in doc.paragraphs:
+                text.append(paragraph.text)
+            return '\n'.join(text)
+        
+        elif file_extension == 'md':
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
+                md_content = file.read()
+            # 将markdown转换为纯文本
+            html = markdown.markdown(md_content)
+            soup = BeautifulSoup(html, 'html.parser')
+            return soup.get_text()
+        
+        elif file_extension in ['xlsx', 'xls']:
+            # 读取Excel文件的所有工作表
+            excel_file = pd.ExcelFile(filepath)
+            text_parts = []
+            for sheet_name in excel_file.sheet_names:
+                df = pd.read_excel(filepath, sheet_name=sheet_name)
+                # 将DataFrame转换为文本，保留结构信息
+                text_parts.append(f"工作表: {sheet_name}\n")
+                text_parts.append(df.to_string(index=False))
+                text_parts.append("\n\n")
+            return '\n'.join(text_parts)
+        
+        else:
+            raise ValueError(f"不支持的文件类型: .{file_extension}")
+            
+    except Exception as e:
+        raise ValueError(f"处理文件 {os.path.basename(filepath)} 时出错: {str(e)}")
+
+
+def extract_text_from_url(url: str) -> str:
+    """从URL提取文本内容。"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        # 检测内容类型
+        content_type = response.headers.get('content-type', '').lower()
+        
+        if 'application/json' in content_type:
+            # JSON API响应
+            json_data = response.json()
+            return str(json_data)
+        elif 'text/plain' in content_type:
+            # 纯文本
+            return response.text
+        else:
+            # HTML内容，使用BeautifulSoup提取文本
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # 移除script和style标签
+            for script in soup(["script", "style"]):
+                script.decompose()
+            
+            # 提取纯文本
+            text = soup.get_text()
+            # 清理多余的空白字符
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text = ' '.join(chunk for chunk in chunks if chunk)
+            
+            return text
+            
+    except Exception as e:
+        raise ValueError(f"从URL {url} 提取内容时出错: {str(e)}")
+
+
+def extract_text_from_api(api_url: str, headers: dict = None, params: dict = None) -> str:
+    """从API端点提取文本内容。"""
+    try:
+        response = requests.get(api_url, headers=headers, params=params, timeout=30)
+        response.raise_for_status()
+        
+        content_type = response.headers.get('content-type', '').lower()
+        
+        if 'application/json' in content_type:
+            json_data = response.json()
+            # 如果是JSON，尝试提取有意义的文本字段
+            if isinstance(json_data, dict):
+                text_fields = []
+                for key, value in json_data.items():
+                    if isinstance(value, str) and len(value) > 10:  # 假设有意义的文本长度 > 10
+                        text_fields.append(f"{key}: {value}")
+                return '\n'.join(text_fields)
+            else:
+                return str(json_data)
+        else:
+            return response.text
+            
+    except Exception as e:
+        raise ValueError(f"从API {api_url} 提取内容时出错: {str(e)}")
 
 
 def split_text(text: str) -> list[str]:
