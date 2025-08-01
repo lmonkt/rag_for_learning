@@ -54,8 +54,8 @@ def process_uploaded_files(files, progress=None):  # 增加默认值，更规范
     file_processor.clear_files()
 
     # 2. 处理文件，切分文本块
-    # 注意：我们将progress对象传递给下一层函数
-    chunks, metadatas, original_ids = process_files_to_chunks(files, file_processor, progress)
+    # 注意：我们将progress对象传递给下一层函数，同时传递嵌入模型用于语义切分
+    chunks, metadatas, original_ids = process_files_to_chunks(files, file_processor, progress, embedding_model=embed_model)
 
     if not chunks:
         return "未能从文件中提取任何文本块。", file_processor.get_file_list()

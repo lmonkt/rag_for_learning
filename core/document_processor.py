@@ -5,7 +5,10 @@ from io import StringIO
 from datetime import datetime
 from pdfminer.high_level import extract_text_to_fp
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from config import CHUNK_SIZE, CHUNK_OVERLAP
+from config import (CHUNK_SIZE, CHUNK_OVERLAP, TEXT_SPLITTING_STRATEGY, 
+                    SEMANTIC_CHUNK_SIZE, SEMANTIC_SIMILARITY_THRESHOLD,
+                    SENTENCE_CHUNK_SIZE, SENTENCE_OVERLAP)
+from core.enhanced_splitters import get_enhanced_splitter
 import logging
 
 
@@ -32,8 +35,8 @@ def extract_text_from_file(filepath: str) -> str:
         raise ValueError(f"不支持的文件类型: {os.path.basename(filepath)}")
 
 
-def split_text(text: str) -> list[str]:
-    """将长文本切分为小块。"""
+def split_text(text: str, embedding_model=None) -> list[str]:
+    """将长文本切分为小块，支持多种切分策略。"""
     # TODO: (改进方向) 更精细化的文本切分策略
     # 思路:
     # 1. 这里是实现新切分策略的核心位置。
@@ -45,12 +48,51 @@ def split_text(text: str) -> list[str]:
     #    embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
     #    text_splitter = SemanticChunker(embeddings)
     #    chunks = text_splitter.create_documents([text]) -> List of Document objects
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        separators=["\n\n", "\n", "。", "，", "；", "：", " ", ""]
-    )
-    return text_splitter.split_text(text)
+    
+    # Determine chunk size and overlap based on strategy
+    if TEXT_SPLITTING_STRATEGY == "semantic":
+        chunk_size = SEMANTIC_CHUNK_SIZE
+        overlap = CHUNK_OVERLAP
+        similarity_threshold = SEMANTIC_SIMILARITY_THRESHOLD
+    elif TEXT_SPLITTING_STRATEGY == "sentence_aware":
+        chunk_size = SENTENCE_CHUNK_SIZE  
+        overlap = SENTENCE_OVERLAP
+        similarity_threshold = 0.7  # Not used for sentence_aware
+    else:  # recursive (default)
+        chunk_size = CHUNK_SIZE
+        overlap = CHUNK_OVERLAP
+        similarity_threshold = 0.7  # Not used for recursive
+    
+    try:
+        # Get the appropriate splitter based on strategy
+        text_splitter = get_enhanced_splitter(
+            strategy=TEXT_SPLITTING_STRATEGY,
+            embedding_model=embedding_model,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            similarity_threshold=similarity_threshold
+        )
+        
+        # Split the text
+        chunks = text_splitter.split_text(text)
+        
+        # Log splitting results for monitoring
+        logging.info(f"Text splitting completed using '{TEXT_SPLITTING_STRATEGY}' strategy: "
+                    f"{len(chunks)} chunks created from {len(text)} characters")
+        
+        return chunks
+        
+    except Exception as e:
+        logging.error(f"Error in text splitting with strategy '{TEXT_SPLITTING_STRATEGY}': {e}")
+        logging.info("Falling back to default recursive character splitter")
+        
+        # Fallback to default recursive splitter
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP,
+            separators=["\n\n", "\n", "。", "，", "；", "：", " ", ""]
+        )
+        return text_splitter.split_text(text)
 
 
 class FileProcessor:
@@ -82,7 +124,7 @@ class FileProcessor:
         ]
 
 
-def process_files_to_chunks(files: list, file_processor: FileProcessor, progress=None) -> tuple[list, list, list]:
+def process_files_to_chunks(files: list, file_processor: FileProcessor, progress=None, embedding_model=None) -> tuple[list, list, list]:
     """处理上传的文件列表，返回所有文本块、元数据和ID。"""
     all_new_chunks = []
     all_new_metadatas = []
@@ -100,7 +142,7 @@ def process_files_to_chunks(files: list, file_processor: FileProcessor, progress
             if not text.strip():
                 raise ValueError("文档内容为空或无法提取文本")
 
-            chunks = split_text(text)
+            chunks = split_text(text, embedding_model=embedding_model)
             doc_id = f"doc_{int(time.time())}_{idx}"
 
             current_file_ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]

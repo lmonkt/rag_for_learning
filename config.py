@@ -37,6 +37,18 @@ GENERATOR_MODEL_SILICONFLOW = "Pro/deepseek-ai/DeepSeek-R1"
 CHUNK_SIZE = 400
 CHUNK_OVERLAP = 40
 
+# --- Text Splitting Strategy Configuration ---
+# Available strategies: "recursive", "semantic", "sentence_aware"
+TEXT_SPLITTING_STRATEGY = os.getenv("TEXT_SPLITTING_STRATEGY", "recursive")
+
+# Semantic chunking parameters (when using semantic strategy)
+SEMANTIC_CHUNK_SIZE = int(os.getenv("SEMANTIC_CHUNK_SIZE", "600"))  # Slightly larger for semantic coherence
+SEMANTIC_SIMILARITY_THRESHOLD = float(os.getenv("SEMANTIC_SIMILARITY_THRESHOLD", "0.7"))  # Minimum similarity to merge chunks
+
+# Sentence-aware chunking parameters
+SENTENCE_CHUNK_SIZE = int(os.getenv("SENTENCE_CHUNK_SIZE", "500"))  # Target size for sentence-aware chunks
+SENTENCE_OVERLAP = int(os.getenv("SENTENCE_OVERLAP", "50"))  # Overlap in characters for sentence chunks
+
 # 混合检索中语义检索的权重 (alpha)
 HYBRID_SEARCH_ALPHA = 0.7
 
