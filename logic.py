@@ -4,7 +4,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 import gradio as gr
 # 导入核心组件
-from core.document_processor import process_files_to_chunks, FileProcessor, extract_text_from_url, extract_text_from_api
+from core.document_processor import process_files_to_chunks, FileProcessor
 from core.retriever import FaissIndexManager, BM25IndexManager, hybrid_merge
 from core.reranker import rerank_results
 from core.llm_interface import call_ollama_api_stream, call_siliconflow_api, generate_new_query
@@ -41,9 +41,9 @@ def initialize_models():
 
 
 def process_uploaded_files(files, progress=None):  # 增加默认值，更规范
-    """处理上传的文档文件，构建或重建知识库。"""
+    """处理上传的PDF文件，构建或重建知识库。"""
     if not files:
-        return "请选择要上传的文档文件", []
+        return "请选择要上传的PDF文件", []
 
     # 1. 清理旧数据
     if progress is not None:
@@ -81,135 +81,6 @@ def process_uploaded_files(files, progress=None):  # 增加默认值，更规范
 
     summary = f"成功处理 {len(files)} 个文件，生成 {len(chunks)} 个文本块。"
     return summary, file_processor.get_file_list()
-
-
-def process_url_content(url, progress=None):
-    """处理URL内容，提取文本并添加到知识库。"""
-    if not url or not url.strip():
-        return "请输入有效的URL", []
-    
-    try:
-        if progress:
-            progress(0.1, desc="正在提取网页内容...")
-        
-        # 提取URL内容
-        text = extract_text_from_url(url.strip())
-        
-        if not text.strip():
-            return "无法从该URL提取到有效内容", []
-        
-        if progress:
-            progress(0.4, desc="正在切分文本...")
-        
-        # 使用现有的文本切分功能
-        from core.document_processor import split_text
-        chunks = split_text(text)
-        
-        if not chunks:
-            return "文本切分失败", []
-        
-        # 创建元数据
-        doc_id = f"url_{int(time.time())}"
-        chunk_ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
-        metadatas = [{"source": url, "doc_id": doc_id, "type": "url"} for _ in chunks]
-        
-        if progress:
-            progress(0.7, desc="生成文本嵌入...")
-        
-        # 生成嵌入并添加到索引
-        embeddings = embed_model.encode(chunks, show_progress_bar=True)
-        embeddings_np = np.array(embeddings).astype('float32')
-        
-        # 添加到索引
-        faiss_manager.add_documents(chunks, embeddings_np, metadatas, chunk_ids)
-        
-        # 准备BM25数据
-        docs_for_bm25 = [{"content": chunk, "id": chunk_id} for chunk, chunk_id in zip(chunks, chunk_ids)]
-        ids_for_bm25 = chunk_ids
-        bm25_manager.add_documents(docs_for_bm25, ids_for_bm25)
-        
-        # 更新文件处理器状态
-        file_processor.add_file(f"URL: {url}")
-        file_processor.update_status(f"URL: {url}", "处理完成", len(chunks))
-        
-        if progress:
-            progress(1.0, desc="完成")
-        
-        summary = f"成功处理URL内容，生成 {len(chunks)} 个文本块。"
-        return summary, file_processor.get_file_list()
-        
-    except Exception as e:
-        logging.error(f"处理URL {url} 时出错: {e}")
-        return f"处理失败: {str(e)}", []
-
-
-def process_api_content(api_url, headers_json=None, progress=None):
-    """处理API内容，提取数据并添加到知识库。"""
-    if not api_url or not api_url.strip():
-        return "请输入有效的API URL", []
-    
-    try:
-        if progress:
-            progress(0.1, desc="正在调用API...")
-        
-        # 解析headers
-        headers = None
-        if headers_json and headers_json.strip():
-            try:
-                import json
-                headers = json.loads(headers_json.strip())
-            except json.JSONDecodeError:
-                return "请求头格式错误，请使用有效的JSON格式", []
-        
-        # 提取API内容
-        text = extract_text_from_api(api_url.strip(), headers=headers)
-        
-        if not text.strip():
-            return "无法从该API提取到有效内容", []
-        
-        if progress:
-            progress(0.4, desc="正在切分文本...")
-        
-        # 使用现有的文本切分功能
-        from core.document_processor import split_text
-        chunks = split_text(text)
-        
-        if not chunks:
-            return "文本切分失败", []
-        
-        # 创建元数据
-        doc_id = f"api_{int(time.time())}"
-        chunk_ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
-        metadatas = [{"source": api_url, "doc_id": doc_id, "type": "api"} for _ in chunks]
-        
-        if progress:
-            progress(0.7, desc="生成文本嵌入...")
-        
-        # 生成嵌入并添加到索引
-        embeddings = embed_model.encode(chunks, show_progress_bar=True)
-        embeddings_np = np.array(embeddings).astype('float32')
-        
-        # 添加到索引
-        faiss_manager.add_documents(chunks, embeddings_np, metadatas, chunk_ids)
-        
-        # 准备BM25数据
-        docs_for_bm25 = [{"content": chunk, "id": chunk_id} for chunk, chunk_id in zip(chunks, chunk_ids)]
-        ids_for_bm25 = chunk_ids
-        bm25_manager.add_documents(docs_for_bm25, ids_for_bm25)
-        
-        # 更新文件处理器状态
-        file_processor.add_file(f"API: {api_url}")
-        file_processor.update_status(f"API: {api_url}", "处理完成", len(chunks))
-        
-        if progress:
-            progress(1.0, desc="完成")
-        
-        summary = f"成功处理API内容，生成 {len(chunks)} 个文本块。"
-        return summary, file_processor.get_file_list()
-        
-    except Exception as e:
-        logging.error(f"处理API {api_url} 时出错: {e}")
-        return f"处理失败: {str(e)}", []
 
 
 def recursive_retrieval(initial_query, enable_web_search, model_choice):

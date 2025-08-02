@@ -40,28 +40,6 @@ class BM25IndexManager:
         self.tokenized_corpus = []
         self.raw_corpus = []
 
-    def add_documents(self, documents, doc_ids):
-        """增量添加文档到BM25索引。"""
-        if not documents:
-            return
-            
-        # 扩展现有语料库
-        start_idx = len(self.raw_corpus)
-        self.raw_corpus.extend([doc['content'] for doc in documents])
-        
-        # 更新映射
-        for i, doc_id in enumerate(doc_ids):
-            self.doc_mapping[start_idx + i] = doc_id
-            
-        # 重新分词并更新语料库
-        new_tokenized = [list(jieba.cut(doc['content'])) for doc in documents]
-        self.tokenized_corpus.extend(new_tokenized)
-        
-        # 重建BM25索引（注意：BM25Okapi不支持增量更新）
-        self.bm25_index = BM25Okapi(self.tokenized_corpus)
-        
-        logging.info(f"成功添加 {len(documents)} 个文档到BM25索引。索引总数: {len(self.raw_corpus)}")
-
 
 # --- FAISS Vector Search ---
 class FaissIndexManager:
@@ -121,28 +99,6 @@ class FaissIndexManager:
         self.faiss_contents_map = {}
         self.faiss_metadatas_map = {}
         self.faiss_id_order_for_index = []
-
-    def add_documents(self, chunks, embeddings_np, metadatas, original_ids):
-        """增量添加文档到现有索引。"""
-        if embeddings_np.shape[0] == 0:
-            logging.warning("没有可供添加的嵌入向量。")
-            return
-
-        # 如果还没有索引，则创建新的
-        if self.faiss_index is None:
-            dimension = embeddings_np.shape[1]
-            self.faiss_index = faiss.IndexFlatL2(dimension)
-
-        # 添加新的嵌入向量
-        self.faiss_index.add(embeddings_np)
-
-        # 更新映射
-        for i, original_id in enumerate(original_ids):
-            self.faiss_contents_map[original_id] = chunks[i]
-            self.faiss_metadatas_map[original_id] = metadatas[i]
-        self.faiss_id_order_for_index.extend(original_ids)
-        
-        logging.info(f"成功添加 {len(chunks)} 个文本块到FAISS索引。索引总数: {self.faiss_index.ntotal}")
 
     def get_all_docs_and_ids(self):
         """获取所有文档和ID，用于构建BM25索引"""
