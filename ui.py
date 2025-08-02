@@ -413,7 +413,25 @@ def create_ui():
                     # 左侧操作面板
                     with gr.Column(scale=5):
                         gr.Markdown("## 📂 文档处理区")
-                        file_input = gr.File(label="上传PDF文档", file_types=[".pdf"], file_count="multiple")
+                        file_input = gr.File(
+                            label="上传文档",
+                            file_types=[".pdf", ".txt", ".doc", ".docx", ".xls", ".xlsx",
+                                      ".ppt", ".pptx", ".md", ".markdown", ".csv", ".json",
+                                      ".html", ".htm"],
+                            file_count="multiple"
+                        )
+                        gr.Markdown("""
+                        **支持的文件格式：**
+                        • PDF文档 (.pdf)
+                        • 纯文本 (.txt) 
+                        • Word文档 (.doc, .docx)
+                        • Excel表格 (.xls, .xlsx)
+                        • PowerPoint演示 (.ppt, .pptx)
+                        • Markdown文档 (.md, .markdown)
+                        • CSV数据 (.csv)
+                        • JSON数据 (.json)
+                        • HTML网页 (.html, .htm)
+                        """)
                         upload_btn = gr.Button("🚀 开始处理", variant="primary")
                         upload_status = gr.Textbox(label="处理状态", interactive=False, lines=2)
                         file_list = gr.Textbox(label="已处理文件", interactive=False, lines=3)
