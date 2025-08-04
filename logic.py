@@ -1,6 +1,7 @@
 # logic.py
 import logging
 import numpy as np
+import ollama
 from sentence_transformers import SentenceTransformer
 import gradio as gr
 # 导入核心组件
@@ -14,8 +15,9 @@ import core.reranker as reranker  # 导入模块以访问get_cross_encoder
 # 导入配置
 from config import (
     EMBED_MODEL_NAME, RETRIEVER_TOP_K, RERANKER_TOP_K,
-    RECURSIVE_RETRIEVAL_MAX_ITERATIONS, RERANK_METHOD
+    RECURSIVE_RETRIEVAL_MAX_ITERATIONS, RERANK_METHOD, OLLAMA_EMBED_MODEL
 )
+from utils.helpers import is_embedding_model_available
 
 # --- 全局状态/资源管理器 ---
 # 这些对象代表了应用的核心状态，由logic.py统一管理
@@ -24,14 +26,47 @@ file_processor = FileProcessor()
 faiss_manager = FaissIndexManager()
 bm25_manager = BM25IndexManager()
 embed_model = None
+get_embedding: None = None
 
 
 def initialize_models():
     """初始化所有需要预加载的模型。"""
-    global embed_model
+    global embed_model, get_embedding  # <<< 重要：现在需要声明两个全局变量
+
     if embed_model is None:
         logging.info("正在加载嵌入模型...")
-        embed_model = SentenceTransformer(EMBED_MODEL_NAME)
+
+        # 1. 首先检查 Ollama 模型是否可用
+        if is_embedding_model_available(OLLAMA_EMBED_MODEL):
+            print(f"✅ 检测到 Ollama 已存在嵌入模型: {OLLAMA_EMBED_MODEL}")
+            print("=> 将使用 Ollama 提供的嵌入服务。")
+
+            # 定义使用 Ollama 的 get_embedding 函数
+            def ollama_get_embedding(texts):
+                if isinstance(texts, str):
+                    texts = [texts]
+                response = ollama.embed(model=OLLAMA_EMBED_MODEL, input=texts)
+                embeddings = response['embeddings']
+                return np.array(embeddings, dtype='float32')
+
+            # 将全局的 get_embedding 指向这个函数
+            get_embedding = ollama_get_embedding
+
+        else:
+            print(f"❌ Ollama 中未找到嵌入模型: {OLLAMA_EMBED_MODEL}，推荐下载，因为SentenceTransformer模型加载速度较慢。")
+            print(f"=> 将回退到 SentenceTransformer 模型: {EMBED_MODEL_NAME}")
+
+            # 加载 SentenceTransformer 模型
+            embed_model = SentenceTransformer(EMBED_MODEL_NAME)  # <<< 注意：这里才真正赋值给 embed_model
+
+            # 定义使用 SentenceTransformer 的 get_embedding 函数
+            def st_get_embedding(texts):
+                embeddings = embed_model.encode(texts, show_progress_bar=True)
+                return np.array(embeddings, dtype='float32')
+
+            # 将全局的 get_embedding 指向这个函数
+            get_embedding = st_get_embedding
+
         logging.info("嵌入模型加载完成。")
     # 预热交叉编码器
     if RERANK_METHOD == 'cross_encoder':
@@ -65,8 +100,7 @@ def process_uploaded_files(files, progress=None):  # 增加默认值，更规范
     if progress:
         progress(0.8, desc="生成文本嵌入...")
     # --- FIX END ---
-    embeddings = embed_model.encode(chunks, show_progress_bar=True)
-    embeddings_np = np.array(embeddings).astype('float32')
+    embeddings_np = get_embedding(chunks)
 
     # 4. 构建FAISS索引
     # --- FIX START: 检查progress对象是否存在 ---
@@ -94,8 +128,7 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
 
         # 1. 语义检索 (FAISS)
         logging.info("步骤 1/5: 执行向量编码和FAISS搜索...")
-        query_embedding = embed_model.encode([query])
-        query_embedding_np = np.array(query_embedding).astype('float32')
+        query_embedding_np=get_embedding([query])
         semantic_results = faiss_manager.search(query_embedding_np, top_k=RETRIEVER_TOP_K)
         logging.info("FAISS搜索完成。")
 

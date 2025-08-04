@@ -24,6 +24,7 @@ CROSS_ENCODER_MODEL_NAME = 'sentence-transformers/distiluse-base-multilingual-ca
 GENERATOR_MODEL_OLLAMA = "deepseek-r1:7b" # 用于生成答案的主模型
 GENERATOR_MODEL_OLLAMA_LIGHT = "deepseek-r1:1.5b" # 用于内部判断、评分的轻量模型
 GENERATOR_MODEL_SILICONFLOW = "Pro/deepseek-ai/DeepSeek-R1"
+OLLAMA_EMBED_MODEL = "bge-m3:567m"  # 或其他嵌入模型
 
 
 # --- RAG Pipeline Parameters ---
