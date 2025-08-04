@@ -58,6 +58,35 @@ def check_environment():
         return False
 
 
+def is_embedding_model_available(model_name: str="bge-m3:567m") -> bool:
+    """
+    检查指定的嵌入模型是否已通过 Ollama 下载并可用。
+    借鉴了 check_environment 函数的风格，使用 /api/show API。
+
+    Args:
+        model_name (str): 要检查的嵌入模型名称，例如 "bge-m3:567m"。
+
+    Returns:
+        bool: 如果模型存在则返回 True，否则返回 False。
+    """
+    try:
+        # 使用与 check_environment 相同的逻辑，调用 /api/show (即 OLLAMA_CHECK_URL)
+        # 注意：这里假设您已经定义了 OLLAMA_CHECK_URL = "http://localhost:11434/api/show"
+        response = requests.post(
+            OLLAMA_CHECK_URL,
+            json={"name": model_name},
+            timeout=10,
+            proxies={"http": None, "https": None}  # 保持与您代码中一致的代理设置
+        )
+        # 如果返回 200，说明模型存在
+        return response.status_code == 200
+
+    except requests.exceptions.RequestException as e:
+        # 如果发生连接错误等异常，可以认为模型不可用，或者至少无法确认
+        print(f"⚠️  检查模型 {model_name} 时发生网络错误: {e}，考虑下载或确定ollama服务是否正常运行。")
+        return False
+
+
 def get_system_models_info() -> dict:
     """
     返回一个包含系统所用模型和技术信息的字典，用于在UI中展示。
