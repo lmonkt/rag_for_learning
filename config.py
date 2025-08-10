@@ -36,7 +36,7 @@ OLLAMA_EMBED_MODEL = "bge-m3:567m"  # 或其他嵌入模型
 #    - 这需要在 `document_processor.py` 中实现新的切分逻辑。
 # 3. 动态调整: 根据文档类型或内容密度动态调整 chunk_size。
 CHUNK_SIZE = 400
-CHUNK_OVERLAP = 40
+CHUNK_OVERLAP = 60
 
 # 混合检索中语义检索的权重 (alpha)
 HYBRID_SEARCH_ALPHA = 0.7
