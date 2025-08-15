@@ -1,14 +1,17 @@
 # core/web_search.py
 import requests
 import logging
-from config import SERPAPI_KEY, SEARCH_ENGINE
+from config import (
+    SERPAPI_KEY, SEARCH_ENGINE, SERPAPI_URL, SEARCH_NUM_RESULTS,
+    SEARCH_LANGUAGE, SEARCH_COUNTRY, SERPAPI_TIMEOUT
+)
 
 
 def check_serpapi_key():
     return SERPAPI_KEY and SERPAPI_KEY.strip() != ""
 
 
-def serpapi_search(query: str, num_results: int = 5) -> list:
+def serpapi_search(query: str, num_results: int = None) -> list:
     """执行SerpAPI搜索并返回结构化结果。"""
     # TODO: (改进方向) 多元数据源接入
     # 思路: 这里可以很容易地替换为其他搜索引擎API，如 Tavily, SearxNG, Google Custom Search API等。
@@ -16,16 +19,20 @@ def serpapi_search(query: str, num_results: int = 5) -> list:
     if not check_serpapi_key():
         raise ValueError("未设置 SERPAPI_KEY。")
 
+    # 使用配置中的默认值，除非明确指定
+    if num_results is None:
+        num_results = SEARCH_NUM_RESULTS
+
     params = {
         "engine": SEARCH_ENGINE,
         "q": query,
         "api_key": SERPAPI_KEY,
         "num": num_results,
-        "hl": "zh-CN",
-        "gl": "cn"
+        "hl": SEARCH_LANGUAGE,
+        "gl": SEARCH_COUNTRY
     }
     try:
-        response = requests.get("https://serpapi.com/search", params=params, timeout=15)
+        response = requests.get(SERPAPI_URL, params=params, timeout=SERPAPI_TIMEOUT)
         response.raise_for_status()
         search_data = response.json()
 

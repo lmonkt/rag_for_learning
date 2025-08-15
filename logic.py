@@ -7,8 +7,8 @@ import gradio as gr
 # 导入核心组件
 from core.document_processor import process_files_to_chunks, FileProcessor
 from core.retriever import FaissIndexManager, BM25IndexManager, hybrid_merge
-from core.reranker import rerank_results
-from core.llm_interface import call_ollama_api_stream, call_siliconflow_api, generate_new_query
+from core.reranker import rerank_documents
+from core.llm_interface import call_ollama_api_stream, call_siliconflow_api, generate_query_variations
 from core.web_search import serpapi_search
 import core.reranker as reranker  # 导入模块以访问get_cross_encoder
 
@@ -149,7 +149,7 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
 
         # 4. 重排序
         logging.info("步骤 4/5: 执行重排序...")
-        reranked_results = rerank_results(query, docs_to_rerank, ids_to_rerank, metas_to_rerank, top_k=RERANKER_TOP_K)
+        reranked_results = rerank_documents(query, docs_to_rerank, ids_to_rerank, metas_to_rerank, top_k=RERANKER_TOP_K)
         logging.info("重排序完成。")
 
         # TODO: (改进方向) 上下文管理与压缩
@@ -191,7 +191,7 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
         if not context_for_next_query.strip():
             break  # 如果本轮没有任何新信息，则停止
 
-        new_query = generate_new_query(initial_query, context_for_next_query[:1000], model_choice)
+        new_query = generate_query_variations(initial_query, context_for_next_query[:1000], model_choice)
         if new_query:
             query = new_query
         else:

@@ -1,0 +1,81 @@
+# 模型配置
+models:
+  embedding:
+    sentence_transformers: "all-MiniLM-L6-v2"
+    ollama: "bge-m3:567m"
+  reranker: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  generator:
+    main: "deepseek-r1:7b"
+    light: "deepseek-r1:1.5b"
+  siliconflow: "Pro/deepseek-ai/DeepSeek-R1"
+
+# 文档分块配置
+chunking:
+  chunk_size: 512
+  chunk_overlap: 100
+
+# 检索配置
+retrieval:
+  hybrid_search_alpha: 0.7
+  retriever_top_k: 10
+  reranker_top_k: 5
+  max_iterations: 3
+
+# API 端点配置
+endpoints:
+  siliconflow: "https://api.siliconflow.cn/v1/chat/completions"
+  ollama_generate: "http://localhost:11434/api/generate"
+  ollama_show: "http://localhost:11434/api/show"
+  ollama_tags: "http://localhost:11434/api/tags"
+  serpapi: "https://serpapi.com/search"
+
+# 搜索配置
+search:
+  engine: "google"
+  num_results: 5
+  language: "zh-CN"
+  country: "cn"
+
+# 重排序方法
+rerank_method: "cross_encoder"
+
+# 系统配置
+system:
+  no_proxy: "localhost,127.0.0.1" # 设置不走代理的地址
+  hf_endpoint: "https://hf-mirror.com" # 设置HuggingFace镜像
+
+# API 调用配置
+api:
+  siliconflow:
+    temperature: 0.7
+    max_tokens: 1536
+    timeout: 120
+    stream: false
+  ollama:
+    temperature: 0.7
+    timeout: 180
+    stream: true
+    query_generation:
+      temperature: 0.5
+      max_tokens: 100
+      timeout: 30
+
+# 网络配置
+network:
+  http_retries: 3
+  connection_timeout: 5
+  request_timeout: 10
+  serpapi_timeout: 15
+  reranker_timeout: 30
+
+# 应用配置
+app:
+  port_range:
+    start: 17995
+    end: 18005
+  host: "127.0.0.1"
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
