@@ -84,8 +84,14 @@ def call_ollama_api_stream(prompt):
         yield f"调用API时出错: {e}"
 
 
-def generate_query_variations(original_query: str) -> list:
-    """生成查询变体以提高检索效果。"""
+def generate_query_variations(original_query: str, context_summary=None, model_choice=None) -> list:
+    """生成查询变体以提高检索效果。
+
+    Args:
+        original_query (str): 原始查询
+        context_summary: 上下文摘要（可选）
+        model_choice: 模型选择（可选）
+    """
     prompt = f"""
 请为以下查询生成2-3个语义相似但表达不同的变体查询，用于提高信息检索的召回率：
 
@@ -100,7 +106,7 @@ def generate_query_variations(original_query: str) -> list:
 
     try:
         # 使用配置的查询生成参数
-        if GENERATOR_MODEL_SILICONFLOW:
+        if GENERATOR_MODEL_SILICONFLOW and SILICONFLOW_API_KEY:
             new_query = call_siliconflow_api(
                 prompt,
                 temperature=QUERY_GENERATION_TEMPERATURE,
