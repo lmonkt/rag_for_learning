@@ -1,63 +1,93 @@
 # config.py
 import os
+import yaml
 from dotenv import load_dotenv
 
 # 加载 .env 文件中的环境变量
 load_dotenv()
 
-# --- API Keys & Endpoints ---
-SERPAPI_KEY = os.getenv("SERPAPI_KEY")
-SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")
-SILICONFLOW_API_URL = os.getenv("SILICONFLOW_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
-OLLAMA_API_URL = "http://localhost:11434/api/generate"
-OLLAMA_CHECK_URL = "http://localhost:11434/api/show"
-OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 
 
-# --- Model Configurations ---
+# 读取 YAML 配置
+with open("config_models.yaml", "r", encoding="utf-8") as f:
+    _config = yaml.safe_load(f)
+
 # TODO: (改进方向) 更复杂的模型管理
 # 思路: 未来可以考虑将模型配置定义为字典或类，方便管理多个不同用途的模型。
 # 例如: MODELS = { 'embedding': 'all-MiniLM-L6-v2', 'reranker': '...', 'generator_small': 'deepseek-r1:1.5b' }
-EMBED_MODEL_NAME = 'all-MiniLM-L6-v2'
-# 如果需要支持中文，可以切换为 'shibing624/text2vec-base-chinese'
-CROSS_ENCODER_MODEL_NAME = 'sentence-transformers/distiluse-base-multilingual-cased-v2'
-GENERATOR_MODEL_OLLAMA = "deepseek-r1:7b" # 用于生成答案的主模型
-GENERATOR_MODEL_OLLAMA_LIGHT = "deepseek-r1:1.5b" # 用于内部判断、评分的轻量模型
-GENERATOR_MODEL_SILICONFLOW = "Pro/deepseek-ai/DeepSeek-R1"
-OLLAMA_EMBED_MODEL = "bge-m3:567m"  # 或其他嵌入模型
-
+# --- Model Configurations ---
+EMBED_MODEL_NAME = _config["models"]["embedding"]["sentence_transformers"]
+CROSS_ENCODER_MODEL_NAME = _config["models"]["reranker"]
+GENERATOR_MODEL_OLLAMA = _config["models"]["generator"]["main"]
+GENERATOR_MODEL_OLLAMA_LIGHT = _config["models"]["generator"]["light"]
+GENERATOR_MODEL_SILICONFLOW = _config["models"]["siliconflow"]
+OLLAMA_EMBED_MODEL = _config["models"]["embedding"]["ollama"]
 
 # --- RAG Pipeline Parameters ---
-# TODO: (改进方向) 更精细化的文本切分策略
-# 当前配置: 使用固定的 chunk_size 和 chunk_overlap。
-# 改进思路:
-# 1. 语义切分: 引入如 'semantic-text-splitter' 库，它使用 embedding 模型来决定切分点，确保语义完整性。
-# 2. 结构化切分: 针对Markdown或HTML，可以基于标题（#, ##）、列表（-）或表格进行切分，保留文档结构。
-#    - 这需要在 `document_processor.py` 中实现新的切分逻辑。
-# 3. 动态调整: 根据文档类型或内容密度动态调整 chunk_size。
-CHUNK_SIZE = 400
-CHUNK_OVERLAP = 60
-
+CHUNK_SIZE = _config["chunking"]["chunk_size"]
+CHUNK_OVERLAP = _config["chunking"]["chunk_overlap"]
 # 混合检索中语义检索的权重 (alpha)
-HYBRID_SEARCH_ALPHA = 0.7
-
+HYBRID_SEARCH_ALPHA = _config["retrieval"]["hybrid_search_alpha"]
 # 检索和重排序返回的 top_k 数量
-RETRIEVER_TOP_K = 10
-RERANKER_TOP_K = 5
-RECURSIVE_RETRIEVAL_MAX_ITERATIONS = 3
-
+RETRIEVER_TOP_K = _config["retrieval"]["retriever_top_k"]
+RERANKER_TOP_K = _config["retrieval"]["reranker_top_k"]
+RECURSIVE_RETRIEVAL_MAX_ITERATIONS = _config["retrieval"]["max_iterations"]
 
 # --- System & Environment ---
 # 禁用 oneDNN 优化 (避免某些CPU上的警告)
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 # 设置不走代理的地址
-os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
+os.environ['NO_PROXY'] = _config["system"]["no_proxy"]
 # 设置HuggingFace镜像
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+os.environ['HF_ENDPOINT'] = _config["system"]["hf_endpoint"]
 
 # --- Search Engine ---
-SEARCH_ENGINE = "google" # 可选 'bing', 'baidu' 等
+SEARCH_ENGINE = _config["search"]["engine"]
 
 # --- Rerank Method ---
-# 可选值: "cross_encoder", "llm"
-RERANK_METHOD = os.getenv("RERANK_METHOD", "cross_encoder")
+RERANK_METHOD = os.getenv("RERANK_METHOD", _config["rerank_method"])
+
+# --- API Keys & Endpoints ---
+SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")
+SILICONFLOW_API_URL = os.getenv("SILICONFLOW_API_URL", _config["endpoints"]["siliconflow"])
+OLLAMA_API_URL = _config["endpoints"]["ollama_generate"]
+OLLAMA_CHECK_URL = _config["endpoints"]["ollama_show"]
+OLLAMA_TAGS_URL = _config["endpoints"]["ollama_tags"]
+SERPAPI_URL = _config["endpoints"]["serpapi"]
+
+# --- API 调用配置 ---
+SILICONFLOW_TEMPERATURE = _config["api"]["siliconflow"]["temperature"]
+SILICONFLOW_MAX_TOKENS = _config["api"]["siliconflow"]["max_tokens"]
+SILICONFLOW_TIMEOUT = _config["api"]["siliconflow"]["timeout"]
+SILICONFLOW_STREAM = _config["api"]["siliconflow"]["stream"]
+
+OLLAMA_TEMPERATURE = _config["api"]["ollama"]["temperature"]
+OLLAMA_TIMEOUT = _config["api"]["ollama"]["timeout"]
+OLLAMA_STREAM = _config["api"]["ollama"]["stream"]
+
+# 查询生成相关配置
+QUERY_GENERATION_TEMPERATURE = _config["api"]["ollama"]["query_generation"]["temperature"]
+QUERY_GENERATION_MAX_TOKENS = _config["api"]["ollama"]["query_generation"]["max_tokens"]
+QUERY_GENERATION_TIMEOUT = _config["api"]["ollama"]["query_generation"]["timeout"]
+
+# --- 网络配置 ---
+HTTP_RETRIES = _config["network"]["http_retries"]
+CONNECTION_TIMEOUT = _config["network"]["connection_timeout"]
+REQUEST_TIMEOUT = _config["network"]["request_timeout"]
+SERPAPI_TIMEOUT = _config["network"]["serpapi_timeout"]
+RERANKER_TIMEOUT = _config["network"]["reranker_timeout"]
+
+# --- 搜索配置 ---
+SEARCH_NUM_RESULTS = _config["search"]["num_results"]
+SEARCH_LANGUAGE = _config["search"]["language"]
+SEARCH_COUNTRY = _config["search"]["country"]
+
+# --- 应用配置 ---
+APP_PORT_START = _config["app"]["port_range"]["start"]
+APP_PORT_END = _config["app"]["port_range"]["end"]
+APP_HOST = _config["app"]["host"]
+
+# --- 日志配置 ---
+LOGGING_LEVEL = _config["logging"]["level"]
+LOGGING_FORMAT = _config["logging"]["format"]

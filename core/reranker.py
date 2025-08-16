@@ -6,12 +6,19 @@ import re
 from sentence_transformers import CrossEncoder
 import requests
 
-from config import CROSS_ENCODER_MODEL_NAME, RERANK_METHOD, OLLAMA_API_URL, GENERATOR_MODEL_OLLAMA_LIGHT
+from config import (
+    CROSS_ENCODER_MODEL_NAME, RERANK_METHOD, OLLAMA_API_URL,
+    GENERATOR_MODEL_OLLAMA_LIGHT, RERANKER_TIMEOUT, HTTP_RETRIES
+)
 
 # --- Cross Encoder Reranking ---
 
 cross_encoder = None
 cross_encoder_lock = threading.Lock()
+
+# 创建一个会话以复用连接
+session = requests.Session()
+session.mount('http://', requests.adapters.HTTPAdapter(max_retries=HTTP_RETRIES))
 
 
 def get_cross_encoder():
@@ -64,7 +71,7 @@ def rerank_with_cross_encoder(query, docs, doc_ids, metadata_list, top_k):
 # --- LLM-based Reranking ---
 
 @lru_cache(maxsize=128)  # 增加缓存大小以应对多次调用
-def get_llm_relevance_score(query, doc, session):
+def get_llm_relevance_score(query, doc):
     """使用LLM对查询和文档的相关性进行评分（带缓存）。"""
     prompt = f"""评估查询和文档的相关性，仅返回0-10的整数分数。
 查询: {query}
@@ -74,7 +81,7 @@ def get_llm_relevance_score(query, doc, session):
         response = session.post(
             OLLAMA_API_URL,
             json={"model": GENERATOR_MODEL_OLLAMA_LIGHT, "prompt": prompt, "stream": False},
-            timeout=30
+            timeout=RERANKER_TIMEOUT
         )
         result = response.json().get("response", "0").strip()
         match = re.search(r'\b([0-9]|10)\b', result)
@@ -99,35 +106,45 @@ def rerank_with_llm(query, docs, doc_ids, metadata_list, top_k):
     #    [2] {doc2}\n
     #    ...
     #    [10] {doc10}\n
-    #    请根据与查询的相关性，对以上文档进行排序。仅返回排序后的ID列表，例如: [8, 2, 5, ...]"
-    # 4. 这种方法成本更高，但通常更准确。
+    #    请按相关性从高到低排序，仅输出文档编号序列，如: 3,7,1,9,2,..."
+
     if not docs:
         return []
 
-    session = requests.Session()
-    results = [
-        (doc_id, {
-            'content': doc,
-            'metadata': meta,
-            'score': get_llm_relevance_score(query, doc, session) / 10.0  # 归一化
-        })
-        for doc_id, doc, meta in zip(doc_ids, docs, metadata_list)
-    ]
-    results = sorted(results, key=lambda x: x[1]['score'], reverse=True)
+    results = []
+    for doc_id, doc, meta in zip(doc_ids, docs, metadata_list):
+        score = get_llm_relevance_score(query, doc)
+        results.append((doc_id, {'content': doc, 'metadata': meta, 'score': score}))
+
+    # 按分数降序排序
+    results.sort(key=lambda x: x[1]['score'], reverse=True)
     return results[:top_k]
 
 
-# --- General Rerank Function ---
+def rerank_documents(query, docs, doc_ids, metadata_list, top_k, method=None):
+    """
+    重排序文档的主要接口。
 
-def rerank_results(query, docs, doc_ids, metadata_list, method=None, top_k=5):
-    """通用重排序入口函数。"""
-    rerank_method = method or RERANK_METHOD
+    Args:
+        query: 查询字符串
+        docs: 文档内容列表
+        doc_ids: 文档ID列表
+        metadata_list: 文档元数据列表
+        top_k: 返回的文档数量
+        method: 重排序方法，如果为None则使用配置中的默认方法
 
-    if rerank_method == "llm":
-        return rerank_with_llm(query, docs, doc_ids, metadata_list, top_k)
-    elif rerank_method == "cross_encoder":
+    Returns:
+        排序后的文档列表，格式为 [(doc_id, {'content': doc, 'metadata': meta, 'score': score}), ...]
+    """
+    if method is None:
+        method = RERANK_METHOD
+
+    if method == "cross_encoder":
         return rerank_with_cross_encoder(query, docs, doc_ids, metadata_list, top_k)
+    elif method == "llm":
+        return rerank_with_llm(query, docs, doc_ids, metadata_list, top_k)
     else:
-        # 默认不重排，直接返回
+        # 如果方法不识别，返回原始顺序
+        logging.warning(f"未知的重排序方法: {method}，使用原始顺序")
         return [(doc_id, {'content': doc, 'metadata': meta, 'score': 1.0 - idx / len(docs)})
                 for idx, (doc_id, doc, meta) in enumerate(zip(doc_ids, docs, metadata_list))]

@@ -7,6 +7,7 @@ from ui import create_ui
 # 导入逻辑层和工具函数
 import logic
 from utils import helpers
+from config import APP_PORT_START, APP_PORT_END, APP_HOST
 
 
 def main():
@@ -21,13 +22,13 @@ def main():
         exit(1)
     print("✅ 环境检查通过。")
 
-    # 2. 查找可用端口
+    # 2. 查找可用端口 - 使用配置中的端口范围
     print("Step 2/4: 检查服务端口...")
-    ports_to_try = [17995, 17996, 17997, 17998, 17999]
+    ports_to_try = list(range(APP_PORT_START, APP_PORT_END + 1))
     selected_port = next((p for p in ports_to_try if helpers.is_port_available(p)), None)
 
     if not selected_port:
-        print("🔴 所有预设端口 (17995-17999) 都已被占用，请检查并释放端口。")
+        print(f"🔴 所有预设端口 ({APP_PORT_START}-{APP_PORT_END}) 都已被占用，请检查并释放端口。")
         exit(1)
     print(f"✅ 将在端口 {selected_port} 启动服务。")
 
@@ -38,7 +39,7 @@ def main():
 
     # 4. 创建并启动Gradio应用
     print("Step 4/4: 构建并启动Web界面...")
-    app_url = f"http://127.0.0.1:{selected_port}"
+    app_url = f"http://{APP_HOST}:{selected_port}"
     print(f"🌐 系统即将就绪，请在浏览器中打开: {app_url}")
 
     demo = create_ui()
@@ -49,10 +50,11 @@ def main():
     except Exception as e:
         print(f"自动打开浏览器失败: {e}，请手动复制链接访问。")
 
-    # 启动服务
+    # 启动应用
     demo.launch(
+        server_name=APP_HOST,
         server_port=selected_port,
-        server_name="0.0.0.0",  # 允许局域网内其他设备访问
+        share=False,
         show_error=True
     )
 

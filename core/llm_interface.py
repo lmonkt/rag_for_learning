@@ -4,18 +4,27 @@ import json
 import requests
 from config import (
     SILICONFLOW_API_KEY, SILICONFLOW_API_URL, GENERATOR_MODEL_SILICONFLOW,
-    OLLAMA_API_URL, GENERATOR_MODEL_OLLAMA, GENERATOR_MODEL_OLLAMA_LIGHT
+    OLLAMA_API_URL, GENERATOR_MODEL_OLLAMA, GENERATOR_MODEL_OLLAMA_LIGHT,
+    SILICONFLOW_TEMPERATURE, SILICONFLOW_MAX_TOKENS, SILICONFLOW_TIMEOUT,
+    OLLAMA_TEMPERATURE, OLLAMA_TIMEOUT, QUERY_GENERATION_TEMPERATURE,
+    QUERY_GENERATION_MAX_TOKENS, QUERY_GENERATION_TIMEOUT, HTTP_RETRIES
 )
 
 # 创建一个会话以复用连接
 session = requests.Session()
-session.mount('http://', requests.adapters.HTTPAdapter(max_retries=3))
+session.mount('http://', requests.adapters.HTTPAdapter(max_retries=HTTP_RETRIES))
 
 
-def call_siliconflow_api(prompt, temperature=0.7, max_tokens=1536):
+def call_siliconflow_api(prompt, temperature=None, max_tokens=None):
     """调用SiliconFlow API。"""
     if not SILICONFLOW_API_KEY:
         raise ValueError("未设置 SILICONFLOW_API_KEY 环境变量。")
+
+    # 使用配置中的默认值，除非明确指定
+    if temperature is None:
+        temperature = SILICONFLOW_TEMPERATURE
+    if max_tokens is None:
+        max_tokens = SILICONFLOW_MAX_TOKENS
 
     payload = {
         "model": GENERATOR_MODEL_SILICONFLOW,
@@ -34,7 +43,7 @@ def call_siliconflow_api(prompt, temperature=0.7, max_tokens=1536):
             SILICONFLOW_API_URL,
             data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
             headers=headers,
-            timeout=120
+            timeout=SILICONFLOW_TIMEOUT
         )
         response.raise_for_status()
         result = response.json()
@@ -51,53 +60,76 @@ def call_ollama_api_stream(prompt):
     payload = {
         "model": GENERATOR_MODEL_OLLAMA,
         "prompt": prompt,
-        "stream": True
+        "stream": True,
+        "temperature": OLLAMA_TEMPERATURE,
     }
+
     try:
-        with session.post(OLLAMA_API_URL, json=payload, stream=True, timeout=180) as response:
+        with session.post(OLLAMA_API_URL, json=payload, stream=True, timeout=OLLAMA_TIMEOUT) as response:
             response.raise_for_status()
+            full_response = ""
             for line in response.iter_lines():
                 if line:
-                    chunk = json.loads(line.decode('utf-8')).get("response", "")
-                    yield chunk
+                    try:
+                        data = json.loads(line.decode('utf-8'))
+                        if 'response' in data:
+                            full_response += data['response']
+                            yield data['response']
+                        if data.get('done', False):
+                            break
+                    except json.JSONDecodeError:
+                        continue
     except Exception as e:
-        logging.error(f"调用Ollama流式API出错: {e}")
-        yield f"调用Ollama模型时出错: {e}"
+        logging.error(f"调用Ollama API出错: {e}")
+        yield f"调用API时出错: {e}"
 
 
-def generate_new_query(initial_query, context_summary, model_choice):
-    """使用LLM分析并生成新的查询。"""
-    # TODO: (改进方向) 查询改写与意图识别
-    # 思路: 这是实现查询扩展的核心位置。
-    # 1. HyDE (Hypothetical Document Embeddings):
-    #    - 在检索前，让LLM基于`initial_query`生成一个假设性的答案。
-    #    - `hyde_prompt = f"请为以下问题写一个简短的、假设性的答案: {initial_query}"`
-    #    - 然后用这个假设性答案的向量去检索，这比用问题的向量效果可能更好。
-    # 2. Step-Back Prompting:
-    #    - `step_back_prompt = f"你是一个善于思考的助手。对于用户的问题 '{initial_query}'，它的核心、更一般性的概念是什么？"`
-    #    - 用LLM生成一个更宽泛的问题，然后同时检索原始问题和宽泛问题，合并结果。
-    # 3. 意图识别:
-    #    - `intent_prompt = f"用户问题是'{initial_query}'。它的意图是'事实查询'，'比较'，还是'摘要'？"`
-    #    - 根据识别的意图，可以调整后续的RAG流程（例如，'摘要'意图可能需要更大的top_k）。
-    prompt = f"""基于原始问题: {initial_query} 和已检索信息: \n{context_summary}\n
-分析是否需要用不同角度或更具体的关键词进行追问。如果需要，请直接提供新的查询问题。如果信息已充分，请回复'不需要进一步查询'。
-新查询:"""
+def generate_query_variations(original_query: str, context_summary=None, model_choice=None) -> list:
+    """生成查询变体以提高检索效果。
+
+    Args:
+        original_query (str): 原始查询
+        context_summary: 上下文摘要（可选）
+        model_choice: 模型选择（可选）
+    """
+    prompt = f"""
+请为以下查询生成2-3个语义相似但表达不同的变体查询，用于提高信息检索的召回率：
+
+原查询：{original_query}
+
+要求：
+1. 保持核心语义不变
+2. 使用不同的词汇和表达方式
+3. 每行一个变体查询
+4. 不要添加额外解释
+"""
 
     try:
-        if model_choice == "siliconflow":
-            new_query = call_siliconflow_api(prompt, temperature=0.5, max_tokens=100)
+        # 使用配置的查询生成参数
+        if GENERATOR_MODEL_SILICONFLOW and SILICONFLOW_API_KEY:
+            new_query = call_siliconflow_api(
+                prompt,
+                temperature=QUERY_GENERATION_TEMPERATURE,
+                max_tokens=QUERY_GENERATION_MAX_TOKENS
+            )
         else:
             response = session.post(
                 OLLAMA_API_URL,
-                json={"model": GENERATOR_MODEL_OLLAMA_LIGHT, "prompt": prompt, "stream": False},
-                timeout=30
+                json={
+                    "model": GENERATOR_MODEL_OLLAMA_LIGHT,
+                    "prompt": prompt,
+                    "stream": False,
+                    "temperature": QUERY_GENERATION_TEMPERATURE,
+                },
+                timeout=QUERY_GENERATION_TIMEOUT
             )
-            new_query = response.json().get("response", "").strip()
+            response.raise_for_status()
+            new_query = response.json().get("response", "")
 
-        if "不需要" in new_query or len(new_query) < 5:
-            return None
-        return new_query
+        # 解析变体查询
+        variations = [line.strip() for line in new_query.split('\n') if line.strip() and not line.startswith('```')]
+        return [original_query] + variations[:3]  # 包含原查询，最多4个查询
 
     except Exception as e:
-        logging.error(f"生成新查询时出错: {e}")
-        return None
+        logging.error(f"生成查询变体失败: {e}")
+        return [original_query]  # 失败时返回原查询
