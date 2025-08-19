@@ -71,7 +71,11 @@ def initialize_models():
                     texts = [""]
 
                 # 记录调试信息
-                logging.debug(f"ollama_get_embedding接收到的输入类型: {type(texts)}, 内容: {texts[:2] if len(texts) > 1 else texts}")
+                    logging.debug(
+                        f"ollama_get_embedding接收到的输入类型: {type(texts)}, "
+                        f"元素数量: {len(texts)}, "
+                        f"元素类型: {[type(t).__name__ for t in texts[:2]]}{'...' if len(texts) > 2 else ''}"
+                    )
 
                 response = ollama.embed(model=OLLAMA_EMBED_MODEL, input=texts)
                 embeddings = response['embeddings']

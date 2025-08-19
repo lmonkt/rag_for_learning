@@ -4,6 +4,7 @@ import requests
 import re
 import json
 import logging
+import logic
 
 # 导入配置以访问API URL和模型信息
 from config import (
@@ -230,7 +231,7 @@ def get_system_runtime_info() -> dict:
                     info["生成模型状态"] = "🟢 可用"
                 else:
                     info["生成模型状态"] = "🔴 不可用"
-            except:
+            except Exception:
                 info["生成模型状态"] = "🔴 不可用"
 
             info["系统环境"] = "🟢 正常"
@@ -248,8 +249,6 @@ def get_system_statistics() -> dict:
     获取系统统计信息
     """
     try:
-        # 这里需要导入logic模块来获取统计信息
-        import logic
         faiss_manager = logic.faiss_manager
 
         doc_count = len(set(meta.get('source', '') for meta in faiss_manager.faiss_metadatas_map.values()))
