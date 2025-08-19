@@ -213,7 +213,10 @@ def enhanced_recursive_split(text: str, chunk_size: int = None, chunk_overlap: i
     # 5. 分块质量评估和修复
     final_chunks = _evaluate_and_fix_chunks(optimized_chunks, chunk_size)
 
-    return final_chunks
+    # 6. 清理分块开头的无用标点符号
+    cleaned_chunks = _clean_chunk_prefixes(final_chunks)
+
+    return cleaned_chunks
 
 
 def _get_smart_separators(text: str) -> list[str]:
@@ -537,6 +540,44 @@ def _fix_unclosed_markers(text: str) -> str:
                 text = text[:last_open] + text[last_open+1:]
 
     return text
+
+
+def _clean_chunk_prefixes(chunks: list[str]) -> list[str]:
+    """
+    清理分块开头的无用标点符号，确保分块内容整洁。
+
+    主要处理以下情况：
+        - 去除分块开头的多余空白字符
+        - 去除分块开头的无意义标点（如多个句号、逗号等）
+        - 确保分块以有意义的内容开始
+
+    Args:
+        chunks (list[str]): 待清理的文本块列表
+
+    Returns:
+        list[str]: 清理后的文本块列表
+
+    示例：
+        输入: ["。 这是一个测试。", "！你好！", "，欢迎来到。"]
+        输出: ["这是一个测试。", "你好！", "欢迎来到。"]
+    """
+    cleaned_chunks = []
+
+    for chunk in chunks:
+        # 去除开头和结尾的空白字符
+        chunk = chunk.strip()
+
+        # 使用正则去除开头的无意义标点符号和空白
+        # 匹配开头的标点符号（中英文）+ 可选的空白字符
+        chunk = re.sub(r'^[。！？,.，；;:：\s]+', '', chunk)
+
+        # 再次去除可能残留的开头空白
+        chunk = chunk.lstrip()
+
+        if chunk:  # 只添加非空分块
+            cleaned_chunks.append(chunk)
+
+    return cleaned_chunks
 
 
 def split_text(text: str) -> list[str]:

@@ -28,10 +28,13 @@ def get_cross_encoder():
         with cross_encoder_lock:
             if cross_encoder is None:
                 try:
+                    logging.info(f"正在加载交叉编码器模型: {CROSS_ENCODER_MODEL_NAME}")
                     cross_encoder = CrossEncoder(CROSS_ENCODER_MODEL_NAME)
-                    logging.info("交叉编码器加载成功。")
+                    logging.info("交叉编码器模型加载成功。")
                 except Exception as e:
                     logging.error(f"加载交叉编码器失败: {e}")
+                    logging.warning("将禁用交叉编码器重排序功能，使用简单排序作为后备方案。")
+                    # 设置为None以便后续检查
                     cross_encoder = None
     return cross_encoder
 
