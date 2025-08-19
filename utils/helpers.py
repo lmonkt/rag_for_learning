@@ -10,7 +10,7 @@ from config import (
     OLLAMA_CHECK_URL, OLLAMA_TAGS_URL, GENERATOR_MODEL_OLLAMA,
     EMBED_MODEL_NAME, CHUNK_SIZE, CHUNK_OVERLAP, HYBRID_SEARCH_ALPHA,
     CROSS_ENCODER_MODEL_NAME, CONNECTION_TIMEOUT, REQUEST_TIMEOUT,
-    APP_HOST
+    APP_HOST, OLLAMA_EMBED_MODEL
 )
 
 
@@ -99,7 +99,7 @@ def get_system_models_info() -> dict:
     从配置中动态获取信息，确保与实际配置保持一致。
     """
     return {
-        "嵌入模型": EMBED_MODEL_NAME,
+        "嵌入模型": OLLAMA_EMBED_MODEL,
         "分块方法": f"RecursiveCharacterTextSplitter (chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})",
         "检索方法": f"向量检索 + BM25混合检索 (α={HYBRID_SEARCH_ALPHA})",
         "重排序模型": CROSS_ENCODER_MODEL_NAME,
@@ -126,11 +126,15 @@ def process_thinking_content(text: str) -> str:
             f"</details>\n\n"
         )
 
-    # 匹配<think>...</think>标签（支持多行）
-    pattern = r'<think>(.*?)</think>'
-    result = re.sub(pattern, replace_think_tag, text, flags=re.DOTALL)
+    # 替换所有的<think>标签
+    processed_text = re.sub(
+        r'<think>(.*?)</think>',
+        replace_think_tag,
+        text,
+        flags=re.DOTALL
+    )
 
-    return result.strip()
+    return processed_text
 
 
 # --- 以下是与答案质量分析相关的辅助函数 ---
@@ -185,3 +189,84 @@ def evaluate_source_credibility(source):
             return score
 
     return 0.5  # 默认中等可信度
+
+
+def get_system_runtime_info() -> dict:
+    """
+    获取系统运行时信息，包括服务状态、模型可用性等
+    """
+    info = {
+        "Ollama服务状态": "🔴 离线",
+        "嵌入模型状态": "🔴 不可用",
+        "生成模型状态": "🔴 不可用",
+        "系统环境": "未检查"
+    }
+
+    try:
+        # 检查Ollama服务
+        response = requests.get(
+            OLLAMA_TAGS_URL.replace("/api/tags", ""),
+            proxies={"http": None, "https": None},
+            timeout=CONNECTION_TIMEOUT
+        )
+        if response.status_code == 200:
+            info["Ollama服务状态"] = "🟢 在线"
+
+            # 检查嵌入模型
+            if is_embedding_model_available(OLLAMA_EMBED_MODEL):
+                info["嵌入模型状态"] = "🟢 可用"
+            else:
+                info["嵌入模型状态"] = "🔴 不可用"
+
+            # 检查生成模型
+            try:
+                model_response = requests.post(
+                    OLLAMA_CHECK_URL,
+                    json={"name": GENERATOR_MODEL_OLLAMA},
+                    timeout=REQUEST_TIMEOUT,
+                    proxies={"http": None, "https": None}
+                )
+                if model_response.status_code == 200:
+                    info["生成模型状态"] = "🟢 可用"
+                else:
+                    info["生成模型状态"] = "🔴 不可用"
+            except:
+                info["生成模型状态"] = "🔴 不可用"
+
+            info["系统环境"] = "🟢 正常"
+        else:
+            info["系统环境"] = "🔴 Ollama服务异常"
+
+    except Exception as e:
+        info["系统环境"] = f"🔴 连接失败: {str(e)[:50]}..."
+
+    return info
+
+
+def get_system_statistics() -> dict:
+    """
+    获取系统统计信息
+    """
+    try:
+        # 这里需要导入logic模块来获取统计信息
+        import logic
+        faiss_manager = logic.faiss_manager
+
+        doc_count = len(set(meta.get('source', '') for meta in faiss_manager.faiss_metadatas_map.values()))
+        chunk_count = len(faiss_manager.faiss_id_order_for_index)
+
+        total_chars = sum(len(content) for content in faiss_manager.faiss_contents_map.values())
+
+        return {
+            "文档数量": f"{doc_count} 个",
+            "文本块数量": f"{chunk_count} 个",
+            "总字符数": f"{total_chars:,} 字符",
+            "平均块大小": f"{total_chars // max(chunk_count, 1):,} 字符/块" if chunk_count > 0 else "0 字符/块"
+        }
+    except Exception as e:
+        return {
+            "文档数量": "获取失败",
+            "文本块数量": "获取失败",
+            "总字符数": "获取失败",
+            "平均块大小": "获取失败"
+        }

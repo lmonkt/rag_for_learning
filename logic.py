@@ -43,8 +43,36 @@ def initialize_models():
 
             # 定义使用 Ollama 的 get_embedding 函数
             def ollama_get_embedding(texts):
+                # 确保输入是字符串列表，处理各种可能的输入格式
                 if isinstance(texts, str):
                     texts = [texts]
+                elif isinstance(texts, list):
+                    # 如果是嵌套列表，展平它
+                    flattened = []
+                    for item in texts:
+                        if isinstance(item, list):
+                            # 如果item本身也是列表，递归展平
+                            for subitem in item:
+                                if isinstance(subitem, str):
+                                    flattened.append(subitem)
+                                else:
+                                    flattened.append(str(subitem))
+                        elif isinstance(item, str):
+                            flattened.append(item)
+                        else:
+                            flattened.append(str(item))
+                    texts = flattened
+                else:
+                    # 如果不是字符串也不是列表，转换为字符串列表
+                    texts = [str(texts)]
+
+                # 确保列表不为空
+                if not texts:
+                    texts = [""]
+
+                # 记录调试信息
+                logging.debug(f"ollama_get_embedding接收到的输入类型: {type(texts)}, 内容: {texts[:2] if len(texts) > 1 else texts}")
+
                 response = ollama.embed(model=OLLAMA_EMBED_MODEL, input=texts)
                 embeddings = response['embeddings']
                 return np.array(embeddings, dtype='float32')
@@ -193,7 +221,8 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
 
         new_query = generate_query_variations(initial_query, context_for_next_query[:1000], model_choice)
         if new_query:
-            query = new_query
+            # generate_query_variations返回的是列表，取第一个作为新的查询
+            query = new_query[0] if isinstance(new_query, list) and new_query else new_query
         else:
             break  # LLM认为不需要继续
     logging.info(f"--- 递归检索结束，共找到 {len(all_contexts)} 条上下文 ---")

@@ -5,7 +5,7 @@ import gradio as gr
 
 # 导入业务逻辑函数，UI的交互将调用这些函数
 import logic
-from utils.helpers import get_system_models_info, process_thinking_content
+from utils.helpers import get_system_models_info, process_thinking_content, get_system_runtime_info, get_system_statistics
 
 chunk_data_cache = []
 
@@ -125,6 +125,35 @@ def show_chunk_details(evt: gr.SelectData):
         selected_chunk = chunk_data_cache[evt.index[0]]
         return selected_chunk.get("完整内容", "内容加载失败")
     return "未找到选中的分块"
+
+def get_system_info_for_ui():
+    """
+    获取系统信息用于UI展示，包括模型配置、运行状态和统计信息
+    """
+    try:
+        # 获取各种系统信息
+        models_info = get_system_models_info()
+        runtime_info = get_system_runtime_info()
+        stats_info = get_system_statistics()
+
+        # 组织信息为HTML格式，便于在UI中展示
+        models_html = ""
+        for key, value in models_info.items():
+            models_html += f"<div class='model-item'><span class='label'>{key}:</span><span class='value'>{value}</span></div>"
+
+        runtime_html = ""
+        for key, value in runtime_info.items():
+            runtime_html += f"<div class='model-item'><span class='label'>{key}:</span><span class='value'>{value}</span></div>"
+
+        stats_html = ""
+        for key, value in stats_info.items():
+            stats_html += f"<div class='model-item'><span class='label'>{key}:</span><span class='value'>{value}</span></div>"
+
+        return models_html, runtime_html, stats_html
+
+    except Exception as e:
+        error_msg = f"<div class='model-item'><span class='label'>错误:</span><span class='value'>获取系统信息失败: {str(e)}</span></div>"
+        return error_msg, error_msg, error_msg
 
 def create_ui():
     """
@@ -403,6 +432,37 @@ def create_ui():
         white-space: pre-wrap;
         overflow-y: auto;
     }
+
+    /* 系统信息页面特有样式 */
+    .system-info-container {
+        display: grid;
+        gap: 20px;
+        margin: 20px 0;
+    }
+    
+    .info-section {
+        background: var(--panel-bg);
+        border-radius: 8px;
+        padding: 20px;
+        border: 1px solid var(--border-color);
+    }
+    
+    .info-section h3 {
+        margin-top: 0;
+        margin-bottom: 16px;
+        color: var(--primary-color);
+        border-bottom: 2px solid var(--border-color);
+        padding-bottom: 8px;
+    }
+    
+    .refresh-button {
+        margin-bottom: 20px;
+    }
+    
+    .status-indicator {
+        font-size: 18px;
+        margin-right: 8px;
+    }
     """) as demo:  # CSS与原文件相同，此处省略
         gr.Markdown("# 🧠 智能文档问答系统")
 
@@ -481,6 +541,64 @@ def create_ui():
                         show_copy_button=True
                     )
 
+            # --- 新增：系统信息 Tab ---
+            with gr.TabItem("📈 系统信息"):
+                with gr.Column():
+                    gr.Markdown("## ⚙️ 系统配置与状态监控")
+                    gr.Markdown("这里展示系统的配置信息、运行状态和统计数据，帮助你了解RAG系统的当前状态。")
+
+                    # 刷新按钮
+                    with gr.Row():
+                        refresh_system_info_btn = gr.Button("🔄 刷新系统信息", variant="primary", elem_classes=["refresh-button"])
+
+                    # 三个信息面板
+                    with gr.Row(equal_height=True):
+                        with gr.Column(scale=1):
+                            with gr.Group(elem_classes=["info-section"]):
+                                gr.Markdown("### 🔧 模型配置")
+                                models_info_display = gr.HTML(
+                                    value="<div class='model-item'><span class='label'>点击刷新按钮</span><span class='value'>加载配置信息</span></div>",
+                                    elem_classes=["model-card"]
+                                )
+
+                        with gr.Column(scale=1):
+                            with gr.Group(elem_classes=["info-section"]):
+                                gr.Markdown("### 🔍 运行状态")
+                                runtime_info_display = gr.HTML(
+                                    value="<div class='model-item'><span class='label'>点击刷新按钮</span><span class='value'>检查运行状态</span></div>",
+                                    elem_classes=["model-card"]
+                                )
+
+                        with gr.Column(scale=1):
+                            with gr.Group(elem_classes=["info-section"]):
+                                gr.Markdown("### 📊 数据统计")
+                                stats_info_display = gr.HTML(
+                                    value="<div class='model-item'><span class='label'>点击刷新按钮</span><span class='value'>加载统计信息</span></div>",
+                                    elem_classes=["model-card"]
+                                )
+
+                    # 额外信息区域
+                    with gr.Row():
+                        with gr.Column():
+                            gr.Markdown("### 📝 使用说明")
+                            gr.Markdown("""
+                            **系统信息页面功能：**
+                            
+                            - **🔧 模型配置**: 显示当前使用的各种AI模型和参数设置
+                            - **🔍 运行状态**: 实时检查Ollama服务和模型的可用性状态  
+                            - **📊 数据统计**: 展示已加载文档的数量和处理统计
+                            
+                            **状态指示器说明：**
+                            - 🟢 表示正常/可用
+                            - 🔴 表示异常/不可用
+                            - ⚠️ 表示警告状态
+                            
+                            如果发现异常状态，请检查：
+                            1. Ollama服务是否正常运行
+                            2. 所需模型是否已下载
+                            3. 网络连接是否正常
+                            """)
+
         # ----------------------------------------------------
         # 绑定UI事件到后端逻辑
         # ----------------------------------------------------
@@ -524,6 +642,13 @@ def create_ui():
             fn=show_chunk_details,
             inputs=[],  # `select` 事件会自动传递一个 `SelectData` 对象
             outputs=[chunk_detail_text]
+        )
+
+        # 新增：系统信息刷新事件
+        refresh_system_info_btn.click(
+            fn=get_system_info_for_ui,
+            inputs=[],
+            outputs=[models_info_display, runtime_info_display, stats_info_display]
         )
 
     return demo

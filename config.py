@@ -12,9 +12,6 @@ load_dotenv()
 with open("config_models.yaml", "r", encoding="utf-8") as f:
     _config = yaml.safe_load(f)
 
-# TODO: (改进方向) 更复杂的模型管理
-# 思路: 未来可以考虑将模型配置定义为字典或类，方便管理多个不同用途的模型。
-# 例如: MODELS = { 'embedding': 'all-MiniLM-L6-v2', 'reranker': '...', 'generator_small': 'deepseek-r1:1.5b' }
 # --- Model Configurations ---
 EMBED_MODEL_NAME = _config["models"]["embedding"]["sentence_transformers"]
 CROSS_ENCODER_MODEL_NAME = _config["models"]["reranker"]
