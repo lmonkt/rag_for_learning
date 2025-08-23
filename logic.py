@@ -266,23 +266,145 @@ def answer_question_stream(question, enable_web_search, model_choice):
 
 你的回答:
 """
-    # TODO: (改进方向) 答案生成效果评估与追溯
-    # 思路:
-    # 1. 更精细的追溯（Citations）:
-    #    - 在生成最终答案后，可以增加一个步骤：
-    #    - `citation_prompt = f"Context: {context_str}\nAnswer: {final_answer}\n请为答案中的每一句话找到最相关的来源，并以 '答案 [来源: doc.pdf]' 的格式重写答案。"`
-    #    - 这比在末尾列出所有来源更具可追溯性。
-    # 2. 答案评估（Faithfulness）:
-    #    - `eval_prompt = f"Context: {context_str}\nAnswer: {final_answer}\n请判断答案中的所有信息是否都完全由上下文支持。回答'是'或'否'。"`
-    #    - 如果LLM回答“否”，可以标记这个答案为“可能包含外部知识”，提醒用户注意。
 
-    # 3. 生成答案
+    # 3. 生成初始答案
     if model_choice == "siliconflow":
-        full_answer = call_siliconflow_api(prompt)
-        yield full_answer, "完成"
+        raw_answer = call_siliconflow_api(prompt)
+        yield raw_answer, "生成中..."
     else:
-        full_answer = ""
+        raw_answer = ""
         for chunk in call_ollama_api_stream(prompt):
-            full_answer += chunk
-            yield full_answer, "生成中..."
-        yield full_answer, "完成"
+            raw_answer += chunk
+            yield raw_answer, "生成中..."
+
+    # 4. 答案质量评估与改进
+    try:
+        yield raw_answer, "评估答案质量中..."
+
+        # 4.1 忠实性检查
+        faithfulness_score, is_faithful = _evaluate_answer_faithfulness(raw_answer, context_str, model_choice)
+
+        # 4.2 生成带精细引用的答案
+        enhanced_answer = _add_detailed_citations(raw_answer, context_str, metadatas, model_choice)
+
+        # 4.3 构建最终答案
+        final_answer = enhanced_answer
+
+        # 添加质量评估信息
+        if not is_faithful:
+            warning = "\n\n⚠️ **质量提醒**: 此答案可能包含超出参考内容的信息，请谨慎参考。"
+            final_answer += warning
+
+        # 添加评估得分（可选，用于调试）
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            final_answer += f"\n\n[调试信息] 忠实性得分: {faithfulness_score:.2f}"
+
+        yield final_answer, "完成"
+
+    except Exception as e:
+        logging.error(f"答案评估过程出错: {e}")
+        # 如果评估失败，返回原始答案
+        yield raw_answer, "完成"
+
+
+def _evaluate_answer_faithfulness(answer, context, model_choice):
+    """评估答案的忠实性（是否完全基于上下文）"""
+    eval_prompt = f"""请评估以下答案是否完全基于提供的上下文内容。
+
+上下文内容:
+{context}
+
+答案:
+{answer}
+
+请按以下格式回答：
+1. 忠实性评分（0-10分，10分表示完全忠实）：
+2. 是否忠实（是/否）：
+3. 简要说明：
+
+格式示例：
+评分：8
+忠实：是
+说明：答案大部分内容都有上下文支持，仅有少量合理推理。
+"""
+
+    try:
+        if model_choice == "siliconflow":
+            eval_result = call_siliconflow_api(eval_prompt)
+        else:
+            eval_result = ""
+            for chunk in call_ollama_api_stream(eval_prompt):
+                eval_result += chunk
+
+        # 解析评估结果
+        lines = eval_result.strip().split('\n')
+        score = 7.0  # 默认分数
+        is_faithful = True  # 默认忠实
+
+        for line in lines:
+            if '评分' in line or '分数' in line:
+                try:
+                    score = float([s for s in line.split() if s.replace('.', '').isdigit()][0])
+                except:
+                    pass
+            if '忠实' in line:
+                is_faithful = '是' in line or 'True' in line.upper()
+
+        # 如果评分低于6分，认为不够忠实
+        if score < 6:
+            is_faithful = False
+
+        return score, is_faithful
+
+    except Exception as e:
+        logging.error(f"忠实性评估失败: {e}")
+        return 7.0, True  # 默认认为忠实
+
+
+def _add_detailed_citations(answer, context, metadatas, model_choice):
+    """为答案添加详细的引用标注"""
+    # 构建来源映射
+    sources = {}
+    for i, meta in enumerate(metadatas):
+        source_name = meta.get('source', f'来源{i+1}')
+        sources[f'来源{i+1}'] = source_name
+
+    source_list = '\n'.join([f"{key}: {value}" for key, value in sources.items()])
+
+    citation_prompt = f"""请为以下答案中的每个重要陈述添加具体的来源标注。
+
+可用来源：
+{source_list}
+
+上下文内容：
+{context}
+
+原始答案：
+{answer}
+
+请重写答案，在每个重要陈述后面添加引用标注，格式为 [来源X]。
+注意：
+1. 只在确实有对应来源支持的陈述后添加引用
+2. 保持答案的自然流畅性
+3. 最后仍需保留完整的来源列表
+
+重写后的答案：
+"""
+
+    try:
+        if model_choice == "siliconflow":
+            enhanced_answer = call_siliconflow_api(citation_prompt)
+        else:
+            enhanced_answer = ""
+            for chunk in call_ollama_api_stream(citation_prompt):
+                enhanced_answer += chunk
+
+        # 如果增强失败，返回原答案
+        if not enhanced_answer.strip():
+            return answer
+
+        return enhanced_answer
+
+    except Exception as e:
+        logging.error(f"添加引用标注失败: {e}")
+        return answer

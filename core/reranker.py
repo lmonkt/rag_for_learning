@@ -40,13 +40,6 @@ def get_cross_encoder():
 
 
 def rerank_with_cross_encoder(query, docs, doc_ids, metadata_list, top_k):
-    """使用交叉编码器对结果进行重排序。"""
-    # TODO: (改进方向) 更复杂的重排序模型/策略
-    # 思路:
-    # 1. 尝试更先进的交叉编码器模型:
-    #    - bge-reranker-large: 一个当前非常流行的、效果很好的重排模型。
-    #    - Cohere Rerank: 如果使用Cohere的API，他们的重排模型效果业界领先。
-    # 2. 这里的修改很简单，只需要在 config.py 中更改 CROSS_ENCODER_MODEL_NAME 即可。
     encoder = get_cross_encoder()
     if not docs or encoder is None:
         # 如果没有文档或模型加载失败，返回原始顺序
@@ -95,22 +88,7 @@ def get_llm_relevance_score(query, doc):
 
 
 def rerank_with_llm(query, docs, doc_ids, metadata_list, top_k):
-    """使用LLM对结果进行重排序。"""
-    # TODO: (改进方向) 更复杂的重排序策略 - Listwise Reranking
-    # 思路:
-    # 当前是 "pointwise" 排序，即独立地给每个文档打分，这忽略了文档间的相对关系。
-    # "Listwise" 方式效果更好：
-    # 1. 构建一个prompt，将所有文档片段传递给LLM。
-    # 2. 要求LLM直接输出一个重排后的文档ID列表。
-    # 3. Prompt示例:
-    #    "Query: {query}\n
-    #    Documents:\n
-    #    [1] {doc1}\n
-    #    [2] {doc2}\n
-    #    ...
-    #    [10] {doc10}\n
-    #    请按相关性从高到低排序，仅输出文档编号序列，如: 3,7,1,9,2,..."
-
+    """使用LLM对结果进行重排序。基于效率考虑，暂时不用。"""
     if not docs:
         return []
 
