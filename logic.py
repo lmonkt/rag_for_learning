@@ -1,5 +1,7 @@
 # logic.py
+import math
 import logging
+import requests
 import numpy as np
 import ollama
 from sentence_transformers import SentenceTransformer
@@ -15,9 +17,12 @@ import core.reranker as reranker  # 导入模块以访问get_cross_encoder
 # 导入配置
 from config import (
     EMBED_MODEL_NAME, RETRIEVER_TOP_K, RERANKER_TOP_K,
-    RECURSIVE_RETRIEVAL_MAX_ITERATIONS, RERANK_METHOD, OLLAMA_EMBED_MODEL
+    RECURSIVE_RETRIEVAL_MAX_ITERATIONS, RERANK_METHOD, OLLAMA_EMBED_MODEL,
+    CONTEXT_MAX_TOKENS, TOKENS_PER_CHAR, SILICONFLOW_API_KEY, GENERATOR_MODEL_OLLAMA_LIGHT, OLLAMA_API_URL,
+    OLLAMA_TIMEOUT,
 )
 from utils.helpers import is_embedding_model_available
+from core.llm_interface import call_siliconflow_api  # 复用现有 SF 客户端
 
 # --- 全局状态/资源管理器 ---
 # 这些对象代表了应用的核心状态，由logic.py统一管理
@@ -148,6 +153,105 @@ def process_uploaded_files(files, progress=None):  # 增加默认值，更规范
     summary = f"成功处理 {len(files)} 个文件，生成 {len(chunks)} 个文本块。"
     return summary, file_processor.get_file_list()
 
+def _estimate_tokens(text: str) -> int:
+    """基于字符数的粗略 token 估算。"""
+    if not text:
+        return 0
+    return int(math.ceil(len(text) * TOKENS_PER_CHAR))
+
+def _total_tokens(texts: list[str]) -> int:
+    return sum(_estimate_tokens(t) for t in texts)
+
+def _ollama_complete(prompt: str, timeout: int | None = None) -> str:
+    """非流式本地总结调用（轻量模型），作为 SF 的后备。"""
+    try:
+        resp = requests.post(
+            OLLAMA_API_URL,
+            json={
+                "model": GENERATOR_MODEL_OLLAMA_LIGHT,
+                "prompt": prompt,
+                "stream": False,
+                "temperature": 0.2
+            },
+            timeout=timeout or OLLAMA_TIMEOUT
+        )
+        resp.raise_for_status()
+        return (resp.json().get("response") or "").strip()
+    except Exception as e:
+        logging.error(f"Ollama 总结失败: {e}")
+        return ""
+
+def _summarize_context(text: str, query: str, target_tokens: int) -> str:
+    """将单个 chunk 压缩到目标 token 限额内（尽量保留关键事实）。"""
+    # 控制输入长度，避免提示过长
+    max_chars = max(512, int(target_tokens / max(TOKENS_PER_CHAR, 0.1) * 2))
+    if len(text) > max_chars:
+        text = text[:max_chars]
+
+    prompt = (
+        f"请用中文在不丢失关键信息的前提下，将下述与查询相关的内容压缩成精炼摘要，"
+        f"限制在约{target_tokens}个 token 内，保留数字、时间、实体、结论：\n\n"
+        f"查询：{query}\n\n"
+        f"内容：\n{text}\n\n"
+        f"摘要："
+    )
+
+    if SILICONFLOW_API_KEY:
+        summary = call_siliconflow_api(prompt, temperature=0.2, max_tokens=max(128, min(1024, target_tokens)))
+    else:
+        summary = _ollama_complete(prompt)
+
+    return (summary or "").strip()
+
+def _fit_into_budget(
+    reranked_results: list[tuple[str, dict]],
+    all_contexts: list[str],
+    all_doc_ids: list[str],
+    all_metadata: list[dict],
+    query: str
+) -> list[str]:
+    """
+    将当前重排结果装入上下文预算：
+    - 贪心加入最高分内容
+    - 若遇到超限，对第一个超限内容做摘要以适配剩余预算
+    - 返回本轮加入的文本列表（供后续上下文统计或日志）
+    """
+    current_tokens = _total_tokens(all_contexts)
+    budget = CONTEXT_MAX_TOKENS
+    joined_this_round: list[str] = []
+
+    for doc_id, result in reranked_results:
+        if doc_id in all_doc_ids:
+            continue
+
+        content = result.get("content", "")
+        meta = result.get("metadata", {}) or {}
+        need = _estimate_tokens(content)
+
+        if current_tokens + need <= budget:
+            all_contexts.append(content)
+            all_doc_ids.append(doc_id)
+            all_metadata.append(meta)
+            joined_this_round.append(content)
+            current_tokens += need
+            continue
+
+        # 尝试在剩余预算内压缩后加入
+        remaining = max(0, budget - current_tokens)
+        # 阈值：剩余不足 10% 预算则直接停止，避免无意义过短摘要
+        if remaining >= int(0.1 * budget):
+            summary = _summarize_context(content, query, target_tokens=remaining)
+            if summary:
+                all_contexts.append(summary)
+                all_doc_ids.append(doc_id)
+                meta = {**meta, "compressed": True}
+                all_metadata.append(meta)
+                joined_this_round.append(summary)
+                current_tokens += _estimate_tokens(summary)
+        # 无论摘要是否成功，预算已近极限，结束本轮装配
+        break
+
+    return joined_this_round
 
 def recursive_retrieval(initial_query, enable_web_search, model_choice):
     """递归检索，整合本地与网络信息。"""
@@ -184,23 +288,13 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
         reranked_results = rerank_documents(query, docs_to_rerank, ids_to_rerank, metas_to_rerank, top_k=RERANKER_TOP_K)
         logging.info("重排序完成。")
 
-        # TODO: (改进方向) 上下文管理与压缩
-        # 思路:
-        # 在将 reranked_results 添加到 all_contexts 之前，检查总长度。
-        # 1. 计算当前 `all_contexts` 的总token数。
-        # 2. 如果加上新的 `reranked_results` 会超过LLM的上下文窗口限制（例如4096个token）。
-        # 3. 触发压缩策略:
-        #    - `summarize_context(long_context, query)`: 使用LLM将一个或多个chunks总结成更短的文本。
-        #    - `filter_context(chunks, query)`: 使用LLM或更简单的启发式方法（如关键字密度）筛选出最不相关的chunks并丢弃。
-        # 4. 将压缩或筛选后的上下文添加到`all_contexts`。
-
-        current_iter_docs = []
-        for doc_id, result_data in reranked_results:
-            if doc_id not in all_doc_ids:  # 避免重复添加
-                all_contexts.append(result_data['content'])
-                all_doc_ids.append(doc_id)
-                all_metadata.append(result_data['metadata'])
-                current_iter_docs.append(result_data['content'])
+        current_iter_docs = _fit_into_budget(
+            reranked_results=reranked_results,
+            all_contexts=all_contexts,
+            all_doc_ids=all_doc_ids,
+            all_metadata=all_metadata,
+            query=query  # 确保此处能拿到当前用户查询
+        )
 
         # 5. 网络搜索 (如果启用)
         web_texts = []
