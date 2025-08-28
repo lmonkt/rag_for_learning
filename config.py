@@ -6,7 +6,10 @@ from dotenv import load_dotenv
 # 加载 .env 文件中的环境变量
 load_dotenv()
 
-
+# 上下文预算（可被环境变量覆盖）
+CONTEXT_MAX_TOKENS = int(os.getenv("CONTEXT_MAX_TOKENS", "8192"))
+# 简易 token 估算：中文建议 1.0~1.2；英文 0.6~1.0。取偏保守值以防超限。
+TOKENS_PER_CHAR = float(os.getenv("TOKENS_PER_CHAR", "0.8"))
 
 # 读取 YAML 配置
 with open("config_models.yaml", "r", encoding="utf-8") as f:

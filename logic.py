@@ -1,5 +1,7 @@
 # logic.py
+import math
 import logging
+import requests
 import numpy as np
 import ollama
 from sentence_transformers import SentenceTransformer
@@ -8,16 +10,19 @@ import gradio as gr
 from core.document_processor import process_files_to_chunks, FileProcessor
 from core.retriever import FaissIndexManager, BM25IndexManager, hybrid_merge
 from core.reranker import rerank_documents
-from core.llm_interface import call_ollama_api_stream, call_siliconflow_api, generate_query_variations
+from core.llm_interface import call_ollama_api_stream, call_siliconflow_api, call_siliconflow_api_stream, generate_query_variations
 from core.web_search import serpapi_search
 import core.reranker as reranker  # 导入模块以访问get_cross_encoder
 
 # 导入配置
 from config import (
     EMBED_MODEL_NAME, RETRIEVER_TOP_K, RERANKER_TOP_K,
-    RECURSIVE_RETRIEVAL_MAX_ITERATIONS, RERANK_METHOD, OLLAMA_EMBED_MODEL
+    RECURSIVE_RETRIEVAL_MAX_ITERATIONS, RERANK_METHOD, OLLAMA_EMBED_MODEL,
+    CONTEXT_MAX_TOKENS, TOKENS_PER_CHAR, SILICONFLOW_API_KEY, GENERATOR_MODEL_OLLAMA_LIGHT, OLLAMA_API_URL,
+    OLLAMA_TIMEOUT,
 )
 from utils.helpers import is_embedding_model_available
+from core.llm_interface import call_siliconflow_api  # 复用现有 SF 客户端
 
 # --- 全局状态/资源管理器 ---
 # 这些对象代表了应用的核心状态，由logic.py统一管理
@@ -148,6 +153,105 @@ def process_uploaded_files(files, progress=None):  # 增加默认值，更规范
     summary = f"成功处理 {len(files)} 个文件，生成 {len(chunks)} 个文本块。"
     return summary, file_processor.get_file_list()
 
+def _estimate_tokens(text: str) -> int:
+    """基于字符数的粗略 token 估算。"""
+    if not text:
+        return 0
+    return int(math.ceil(len(text) * TOKENS_PER_CHAR))
+
+def _total_tokens(texts: list[str]) -> int:
+    return sum(_estimate_tokens(t) for t in texts)
+
+def _ollama_complete(prompt: str, timeout: int | None = None) -> str:
+    """非流式本地总结调用（轻量模型），作为 SF 的后备。"""
+    try:
+        resp = requests.post(
+            OLLAMA_API_URL,
+            json={
+                "model": GENERATOR_MODEL_OLLAMA_LIGHT,
+                "prompt": prompt,
+                "stream": False,
+                "temperature": 0.2
+            },
+            timeout=timeout or OLLAMA_TIMEOUT
+        )
+        resp.raise_for_status()
+        return (resp.json().get("response") or "").strip()
+    except Exception as e:
+        logging.error(f"Ollama 总结失败: {e}")
+        return ""
+
+def _summarize_context(text: str, query: str, target_tokens: int) -> str:
+    """将单个 chunk 压缩到目标 token 限额内（尽量保留关键事实）。"""
+    # 控制输入长度，避免提示过长
+    max_chars = max(512, int(target_tokens / max(TOKENS_PER_CHAR, 0.1) * 2))
+    if len(text) > max_chars:
+        text = text[:max_chars]
+
+    prompt = (
+        f"请用中文在不丢失关键信息的前提下，将下述与查询相关的内容压缩成精炼摘要，"
+        f"限制在约{target_tokens}个 token 内，保留数字、时间、实体、结论：\n\n"
+        f"查询：{query}\n\n"
+        f"内容：\n{text}\n\n"
+        f"摘要："
+    )
+
+    if SILICONFLOW_API_KEY:
+        summary = call_siliconflow_api(prompt, temperature=0.2, max_tokens=max(128, min(1024, target_tokens)))
+    else:
+        summary = _ollama_complete(prompt)
+
+    return (summary or "").strip()
+
+def _fit_into_budget(
+    reranked_results: list[tuple[str, dict]],
+    all_contexts: list[str],
+    all_doc_ids: list[str],
+    all_metadata: list[dict],
+    query: str
+) -> list[str]:
+    """
+    将当前重排结果装入上下文预算：
+    - 贪心加入最高分内容
+    - 若遇到超限，对第一个超限内容做摘要以适配剩余预算
+    - 返回本轮加入的文本列表（供后续上下文统计或日志）
+    """
+    current_tokens = _total_tokens(all_contexts)
+    budget = CONTEXT_MAX_TOKENS
+    joined_this_round: list[str] = []
+
+    for doc_id, result in reranked_results:
+        if doc_id in all_doc_ids:
+            continue
+
+        content = result.get("content", "")
+        meta = result.get("metadata", {}) or {}
+        need = _estimate_tokens(content)
+
+        if current_tokens + need <= budget:
+            all_contexts.append(content)
+            all_doc_ids.append(doc_id)
+            all_metadata.append(meta)
+            joined_this_round.append(content)
+            current_tokens += need
+            continue
+
+        # 尝试在剩余预算内压缩后加入
+        remaining = max(0, budget - current_tokens)
+        # 阈值：剩余不足 10% 预算则直接停止，避免无意义过短摘要
+        if remaining >= int(0.1 * budget):
+            summary = _summarize_context(content, query, target_tokens=remaining)
+            if summary:
+                all_contexts.append(summary)
+                all_doc_ids.append(doc_id)
+                meta = {**meta, "compressed": True}
+                all_metadata.append(meta)
+                joined_this_round.append(summary)
+                current_tokens += _estimate_tokens(summary)
+        # 无论摘要是否成功，预算已近极限，结束本轮装配
+        break
+
+    return joined_this_round
 
 def recursive_retrieval(initial_query, enable_web_search, model_choice):
     """递归检索，整合本地与网络信息。"""
@@ -184,23 +288,13 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
         reranked_results = rerank_documents(query, docs_to_rerank, ids_to_rerank, metas_to_rerank, top_k=RERANKER_TOP_K)
         logging.info("重排序完成。")
 
-        # TODO: (改进方向) 上下文管理与压缩
-        # 思路:
-        # 在将 reranked_results 添加到 all_contexts 之前，检查总长度。
-        # 1. 计算当前 `all_contexts` 的总token数。
-        # 2. 如果加上新的 `reranked_results` 会超过LLM的上下文窗口限制（例如4096个token）。
-        # 3. 触发压缩策略:
-        #    - `summarize_context(long_context, query)`: 使用LLM将一个或多个chunks总结成更短的文本。
-        #    - `filter_context(chunks, query)`: 使用LLM或更简单的启发式方法（如关键字密度）筛选出最不相关的chunks并丢弃。
-        # 4. 将压缩或筛选后的上下文添加到`all_contexts`。
-
-        current_iter_docs = []
-        for doc_id, result_data in reranked_results:
-            if doc_id not in all_doc_ids:  # 避免重复添加
-                all_contexts.append(result_data['content'])
-                all_doc_ids.append(doc_id)
-                all_metadata.append(result_data['metadata'])
-                current_iter_docs.append(result_data['content'])
+        current_iter_docs = _fit_into_budget(
+            reranked_results=reranked_results,
+            all_contexts=all_contexts,
+            all_doc_ids=all_doc_ids,
+            all_metadata=all_metadata,
+            query=query  # 确保此处能拿到当前用户查询
+        )
 
         # 5. 网络搜索 (如果启用)
         web_texts = []
@@ -243,9 +337,11 @@ def answer_question_stream(question, enable_web_search, model_choice):
         logging.warning("知识库为空，将仅使用网络搜索结果。")
 
     # 1. 递归检索获取上下文
+    yield "🔍 正在搜索相关文档...", "检索中"
     contexts, doc_ids, metadatas = recursive_retrieval(question, enable_web_search, model_choice)
 
     # 2. 构建Prompt
+    yield "📝 正在构建提示词...", "准备中"
     context_str = "\n\n---\n\n".join(
         f"[来源: {meta.get('source', '未知')}]\n{ctx}" for ctx, meta in zip(contexts, metadatas)
     )
@@ -267,43 +363,65 @@ def answer_question_stream(question, enable_web_search, model_choice):
 你的回答:
 """
 
-    # 3. 生成初始答案
+    # 3. 生成答案（真正的流式输出）
+    yield "🤖 正在生成回答...", "生成中"
+    raw_answer = ""
+
     if model_choice == "siliconflow":
-        raw_answer = call_siliconflow_api(prompt)
-        yield raw_answer, "生成中..."
+        # 对于SiliconFlow，我们需要实现真正的流式输出
+        try:
+            # 首先尝试流式调用，如果不支持则回退到非流式
+            response = call_siliconflow_api_stream(prompt)
+            if response:  # 如果支持流式
+                for chunk in response:
+                    raw_answer += chunk
+                    yield raw_answer, "生成中"
+            else:  # 回退到非流式
+                raw_answer = call_siliconflow_api(prompt)
+                # 模拟流式输出，分段显示
+                words = raw_answer.split()
+                current_text = ""
+                for i, word in enumerate(words):
+                    current_text += word + " "
+                    if i % 3 == 0 or i == len(words) - 1:  # 每3个词更新一次
+                        yield current_text.strip(), "生成中"
+        except Exception as e:
+            logging.error(f"SiliconFlow生成失败: {e}")
+            raw_answer = f"抱歉，生成回答时出现错误：{str(e)}"
+            yield raw_answer, "错误"
+            return
     else:
-        raw_answer = ""
-        for chunk in call_ollama_api_stream(prompt):
-            raw_answer += chunk
-            yield raw_answer, "生成中..."
+        # Ollama流式输出
+        try:
+            for chunk in call_ollama_api_stream(prompt):
+                raw_answer += chunk
+                yield raw_answer, "生成中"
+        except Exception as e:
+            logging.error(f"Ollama生成失败: {e}")
+            raw_answer = f"抱歉，生成回答时出现错误：{str(e)}"
+            yield raw_answer, "错误"
+            return
 
-    # 4. 答案质量评估与改进
+    # 4. 简化后续处理，避免阻塞流式输出
     try:
-        yield raw_answer, "评估答案质量中..."
+        # 直接添加来源信息，不进行复杂的评估和重写
+        sources = []
+        for meta in metadatas:
+            source_name = meta.get('source', '未知来源')
+            if source_name not in sources:
+                sources.append(source_name)
 
-        # 4.1 忠实性检查
-        faithfulness_score, is_faithful = _evaluate_answer_faithfulness(raw_answer, context_str, model_choice)
-
-        # 4.2 生成带精细引用的答案
-        enhanced_answer = _add_detailed_citations(raw_answer, context_str, metadatas, model_choice)
-
-        # 4.3 构建最终答案
-        final_answer = enhanced_answer
-
-        # 添加质量评估信息
-        if not is_faithful:
-            warning = "\n\n⚠️ **质量提醒**: 此答案可能包含超出参考内容的信息，请谨慎参考。"
-            final_answer += warning
-
-        # 添加评估得分（可选，用于调试）
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            final_answer += f"\n\n[调试信息] 忠实性得分: {faithfulness_score:.2f}"
+        if sources:
+            sources_text = f"\n\n📚 **参考来源**: {', '.join(sources)}"
+            final_answer = raw_answer + sources_text
+        else:
+            final_answer = raw_answer
 
         yield final_answer, "完成"
 
     except Exception as e:
-        logging.error(f"答案评估过程出错: {e}")
-        # 如果评估失败，返回原始答案
+        logging.error(f"后处理过程出错: {e}")
+        # 如果后处理失败，返回原始答案
         yield raw_answer, "完成"
 
 
