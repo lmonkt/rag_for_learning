@@ -10,7 +10,7 @@ import gradio as gr
 from core.document_processor import process_files_to_chunks, FileProcessor
 from core.retriever import FaissIndexManager, BM25IndexManager, hybrid_merge
 from core.reranker import rerank_documents
-from core.llm_interface import call_ollama_api_stream, call_siliconflow_api, generate_query_variations
+from core.llm_interface import call_ollama_api_stream, call_siliconflow_api, call_siliconflow_api_stream, generate_query_variations
 from core.web_search import serpapi_search
 import core.reranker as reranker  # 导入模块以访问get_cross_encoder
 
@@ -337,9 +337,11 @@ def answer_question_stream(question, enable_web_search, model_choice):
         logging.warning("知识库为空，将仅使用网络搜索结果。")
 
     # 1. 递归检索获取上下文
+    yield "🔍 正在搜索相关文档...", "检索中"
     contexts, doc_ids, metadatas = recursive_retrieval(question, enable_web_search, model_choice)
 
     # 2. 构建Prompt
+    yield "📝 正在构建提示词...", "准备中"
     context_str = "\n\n---\n\n".join(
         f"[来源: {meta.get('source', '未知')}]\n{ctx}" for ctx, meta in zip(contexts, metadatas)
     )
@@ -361,43 +363,65 @@ def answer_question_stream(question, enable_web_search, model_choice):
 你的回答:
 """
 
-    # 3. 生成初始答案
+    # 3. 生成答案（真正的流式输出）
+    yield "🤖 正在生成回答...", "生成中"
+    raw_answer = ""
+
     if model_choice == "siliconflow":
-        raw_answer = call_siliconflow_api(prompt)
-        yield raw_answer, "生成中..."
+        # 对于SiliconFlow，我们需要实现真正的流式输出
+        try:
+            # 首先尝试流式调用，如果不支持则回退到非流式
+            response = call_siliconflow_api_stream(prompt)
+            if response:  # 如果支持流式
+                for chunk in response:
+                    raw_answer += chunk
+                    yield raw_answer, "生成中"
+            else:  # 回退到非流式
+                raw_answer = call_siliconflow_api(prompt)
+                # 模拟流式输出，分段显示
+                words = raw_answer.split()
+                current_text = ""
+                for i, word in enumerate(words):
+                    current_text += word + " "
+                    if i % 3 == 0 or i == len(words) - 1:  # 每3个词更新一次
+                        yield current_text.strip(), "生成中"
+        except Exception as e:
+            logging.error(f"SiliconFlow生成失败: {e}")
+            raw_answer = f"抱歉，生成回答时出现错误：{str(e)}"
+            yield raw_answer, "错误"
+            return
     else:
-        raw_answer = ""
-        for chunk in call_ollama_api_stream(prompt):
-            raw_answer += chunk
-            yield raw_answer, "生成中..."
+        # Ollama流式输出
+        try:
+            for chunk in call_ollama_api_stream(prompt):
+                raw_answer += chunk
+                yield raw_answer, "生成中"
+        except Exception as e:
+            logging.error(f"Ollama生成失败: {e}")
+            raw_answer = f"抱歉，生成回答时出现错误：{str(e)}"
+            yield raw_answer, "错误"
+            return
 
-    # 4. 答案质量评估与改进
+    # 4. 简化后续处理，避免阻塞流式输出
     try:
-        yield raw_answer, "评估答案质量中..."
+        # 直接添加来源信息，不进行复杂的评估和重写
+        sources = []
+        for meta in metadatas:
+            source_name = meta.get('source', '未知来源')
+            if source_name not in sources:
+                sources.append(source_name)
 
-        # 4.1 忠实性检查
-        faithfulness_score, is_faithful = _evaluate_answer_faithfulness(raw_answer, context_str, model_choice)
-
-        # 4.2 生成带精细引用的答案
-        enhanced_answer = _add_detailed_citations(raw_answer, context_str, metadatas, model_choice)
-
-        # 4.3 构建最终答案
-        final_answer = enhanced_answer
-
-        # 添加质量评估信息
-        if not is_faithful:
-            warning = "\n\n⚠️ **质量提醒**: 此答案可能包含超出参考内容的信息，请谨慎参考。"
-            final_answer += warning
-
-        # 添加评估得分（可选，用于调试）
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            final_answer += f"\n\n[调试信息] 忠实性得分: {faithfulness_score:.2f}"
+        if sources:
+            sources_text = f"\n\n📚 **参考来源**: {', '.join(sources)}"
+            final_answer = raw_answer + sources_text
+        else:
+            final_answer = raw_answer
 
         yield final_answer, "完成"
 
     except Exception as e:
-        logging.error(f"答案评估过程出错: {e}")
-        # 如果评估失败，返回原始答案
+        logging.error(f"后处理过程出错: {e}")
+        # 如果后处理失败，返回原始答案
         yield raw_answer, "完成"
 
 

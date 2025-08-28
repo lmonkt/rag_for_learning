@@ -84,6 +84,64 @@ def call_ollama_api_stream(prompt):
         yield f"调用API时出错: {e}"
 
 
+def call_siliconflow_api_stream(prompt, temperature=None, max_tokens=None):
+    """以流式方式调用SiliconFlow API。"""
+    if not SILICONFLOW_API_KEY:
+        return None  # 返回None表示不支持流式
+
+    # 使用配置中的默认值，除非明确指定
+    if temperature is None:
+        temperature = SILICONFLOW_TEMPERATURE
+    if max_tokens is None:
+        max_tokens = SILICONFLOW_MAX_TOKENS
+
+    payload = {
+        "model": GENERATOR_MODEL_SILICONFLOW,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": True,  # 启用流式输出
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    headers = {
+        "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+
+    try:
+        response = session.post(
+            SILICONFLOW_API_URL,
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers=headers,
+            timeout=SILICONFLOW_TIMEOUT,
+            stream=True
+        )
+        response.raise_for_status()
+
+        # 处理流式响应
+        for line in response.iter_lines():
+            if line:
+                line_str = line.decode('utf-8')
+                if line_str.startswith('data: '):
+                    line_str = line_str[6:]  # 移除'data: '前缀
+
+                if line_str.strip() == '[DONE]':
+                    break
+
+                try:
+                    data = json.loads(line_str)
+                    if 'choices' in data and len(data['choices']) > 0:
+                        delta = data['choices'][0].get('delta', {})
+                        content = delta.get('content', '')
+                        if content:
+                            yield content
+                except json.JSONDecodeError:
+                    continue
+
+    except Exception as e:
+        logging.error(f"SiliconFlow流式调用失败: {e}")
+        return None  # 返回None表示流式调用失败
+
+
 def generate_query_variations(original_query: str, context_summary=None, model_choice=None) -> list:
     """生成查询变体以提高检索效果。
 
