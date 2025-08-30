@@ -21,6 +21,10 @@ CROSS_ENCODER_MODEL_NAME = _config["models"]["reranker"]
 GENERATOR_MODEL_OLLAMA = _config["models"]["generator"]["main"]
 GENERATOR_MODEL_OLLAMA_LIGHT = _config["models"]["generator"]["light"]
 GENERATOR_MODEL_SILICONFLOW = _config["models"]["siliconflow"]
+# 新增：DeepSeek 与 阿里云模型名
+GENERATOR_MODEL_DEEPSEEK = _config["models"].get("deepseek")
+GENERATOR_MODEL_ALIYUN = _config["models"].get("aliyun")
+
 OLLAMA_EMBED_MODEL = _config["models"]["embedding"]["ollama"]
 
 # --- RAG Pipeline Parameters ---
@@ -49,8 +53,20 @@ RERANK_METHOD = os.getenv("RERANK_METHOD", _config["rerank_method"])
 
 # --- API Keys & Endpoints ---
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+
+# SiliconFlow
 SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")
 SILICONFLOW_API_URL = os.getenv("SILICONFLOW_API_URL", _config["endpoints"]["siliconflow"])
+
+# DeepSeek（OpenAI兼容）
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL", _config["endpoints"].get("deepseek", "https://api.deepseek.com/v1/chat/completions"))
+
+# 阿里云 DashScope 兼容
+DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
+ALIYUN_API_URL = os.getenv("ALIYUN_API_URL", _config["endpoints"].get("aliyun", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"))
+
+# 本地 Ollama
 OLLAMA_API_URL = _config["endpoints"]["ollama_generate"]
 OLLAMA_CHECK_URL = _config["endpoints"]["ollama_show"]
 OLLAMA_TAGS_URL = _config["endpoints"]["ollama_tags"]
@@ -62,6 +78,19 @@ SILICONFLOW_MAX_TOKENS = _config["api"]["siliconflow"]["max_tokens"]
 SILICONFLOW_TIMEOUT = _config["api"]["siliconflow"]["timeout"]
 SILICONFLOW_STREAM = _config["api"]["siliconflow"]["stream"]
 
+# DeepSeek
+DEEPSEEK_TEMPERATURE = _config["api"].get("deepseek", {}).get("temperature", 0.7)
+DEEPSEEK_MAX_TOKENS = _config["api"].get("deepseek", {}).get("max_tokens", 1536)
+DEEPSEEK_TIMEOUT = _config["api"].get("deepseek", {}).get("timeout", 120)
+DEEPSEEK_STREAM = _config["api"].get("deepseek", {}).get("stream", True)
+
+# 阿里云
+ALIYUN_TEMPERATURE = _config["api"].get("aliyun", {}).get("temperature", 0.7)
+ALIYUN_MAX_TOKENS = _config["api"].get("aliyun", {}).get("max_tokens", 1536)
+ALIYUN_TIMEOUT = _config["api"].get("aliyun", {}).get("timeout", 120)
+ALIYUN_STREAM = _config["api"].get("aliyun", {}).get("stream", True)
+
+# Ollama
 OLLAMA_TEMPERATURE = _config["api"]["ollama"]["temperature"]
 OLLAMA_TIMEOUT = _config["api"]["ollama"]["timeout"]
 OLLAMA_STREAM = _config["api"]["ollama"]["stream"]

@@ -10,7 +10,7 @@ from utils.helpers import get_system_models_info, process_thinking_content, get_
 chunk_data_cache = []
 
 # 将原始文件中的 process_chat 逻辑封装为UI的事件处理器
-def chat_interface(question, history, enable_web_search, model_choice):
+def chat_interface(question, history, enable_web_search, model_choice, allow_supplement):
     """
     处理聊天输入的包装函数。
     它接收UI组件的状态，调用后端逻辑，并以流式方式更新UI。
@@ -31,7 +31,7 @@ def chat_interface(question, history, enable_web_search, model_choice):
 
     try:
         logging.info(f"开始处理问题: '{question}'")
-        response_generator = logic.answer_question_stream(question, enable_web_search, model_choice)
+        response_generator = logic.answer_question_stream(question, enable_web_search, model_choice, allow_supplement=allow_supplement)
 
         # 流式更新聊天机器人的回答
         final_response = ""
@@ -500,8 +500,10 @@ def create_ui():
                         question_input = gr.Textbox(label="输入问题", lines=3, placeholder="请输入您的问题...")
                         with gr.Row():
                             web_search_checkbox = gr.Checkbox(label="启用联网搜索", value=False)
-                            model_choice = gr.Dropdown(choices=["ollama", "siliconflow"], value="ollama",
+                            model_choice = gr.Dropdown(choices=["ollama", "siliconflow", "deepseek", "aliyun"], value="ollama",
                                                        label="模型选择")
+                        with gr.Row():
+                            allow_supplement = gr.Checkbox(label="允许模型补充外部知识（不足时标注为[补充]）", value=True)
                         with gr.Row():
                             ask_btn = gr.Button("🔍 开始提问", variant="primary", scale=2)
                             clear_btn = gr.Button("🗑️ 清空对话", variant="secondary", scale=1)
@@ -614,14 +616,14 @@ def create_ui():
         # 2. 提问按钮点击事件
         ask_btn.click(
             fn=chat_interface,  # 调用上面定义的UI包装函数
-            inputs=[question_input, chatbot, web_search_checkbox, model_choice],
+            inputs=[question_input, chatbot, web_search_checkbox, model_choice, allow_supplement],
             outputs=[chatbot, question_input]  # 更新chatbot，并清空输入框
         )
 
         # 3. 回车键提问事件
         question_input.submit(
             fn=chat_interface,
-            inputs=[question_input, chatbot, web_search_checkbox, model_choice],
+            inputs=[question_input, chatbot, web_search_checkbox, model_choice, allow_supplement],
             outputs=[chatbot, question_input]
         )
 

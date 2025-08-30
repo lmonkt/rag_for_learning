@@ -8,6 +8,9 @@ models:
     main: "deepseek-r1:7b"
     light: "deepseek-r1:1.5b"
   siliconflow: "Pro/deepseek-ai/DeepSeek-R1"
+  # 新增：DeepSeek 与 阿里云（DashScope 兼容）模型名
+  deepseek: "deepseek-chat"
+  aliyun: "qwen3-30b-a3b-instruct-2507"
 
 # 文档分块配置
 chunking:
@@ -28,6 +31,9 @@ endpoints:
   ollama_show: "http://localhost:11434/api/show"
   ollama_tags: "http://localhost:11434/api/tags"
   serpapi: "https://serpapi.com/search"
+  # 新增：DeepSeek 与 阿里云 OpenAI 兼容端点
+  deepseek: "https://api.deepseek.com/v1/chat/completions"
+  aliyun: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 
 # 搜索配置
 search:
@@ -59,6 +65,17 @@ api:
       temperature: 0.5
       max_tokens: 100
       timeout: 30
+  # 新增：DeepSeek 与 阿里云的默认参数
+  deepseek:
+    temperature: 0.7
+    max_tokens: 1536
+    timeout: 120
+    stream: true
+  aliyun:
+    temperature: 0.7
+    max_tokens: 1536
+    timeout: 120
+    stream: true
 
 # 网络配置
 network:
