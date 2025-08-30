@@ -14,12 +14,21 @@ from core.llm_interface import call_ollama_api_stream, call_siliconflow_api, cal
 from core.web_search import serpapi_search
 import core.reranker as reranker  # 导入模块以访问get_cross_encoder
 
+# 新增：导入 DeepSeek 与 阿里云 API
+from core.llm_interface import (
+    call_deepseek_api_stream, call_deepseek_api,
+    call_aliyun_api_stream, call_aliyun_api,
+)
+
 # 导入配置
 from config import (
     EMBED_MODEL_NAME, RETRIEVER_TOP_K, RERANKER_TOP_K,
     RECURSIVE_RETRIEVAL_MAX_ITERATIONS, RERANK_METHOD, OLLAMA_EMBED_MODEL,
     CONTEXT_MAX_TOKENS, TOKENS_PER_CHAR, SILICONFLOW_API_KEY, GENERATOR_MODEL_OLLAMA_LIGHT, OLLAMA_API_URL,
     OLLAMA_TIMEOUT,
+    # 新增：用于调试提示与可用性判断
+    DEEPSEEK_API_KEY, DASHSCOPE_API_KEY,
+    GENERATOR_MODEL_OLLAMA, GENERATOR_MODEL_SILICONFLOW, GENERATOR_MODEL_DEEPSEEK, GENERATOR_MODEL_ALIYUN,
 )
 from utils.helpers import is_embedding_model_available
 from core.llm_interface import call_siliconflow_api  # 复用现有 SF 客户端
@@ -112,6 +121,18 @@ def initialize_models():
         logging.info("交叉编码器预加载完成。")
 
 
+def ensure_embeddings_ready() -> bool:
+    """确保 get_embedding 可用，如未初始化则尝试初始化。"""
+    global get_embedding
+    if get_embedding is None:
+        try:
+            initialize_models()
+        except Exception as e:
+            logging.error(f"初始化嵌入模型失败: {e}")
+            return False
+    return get_embedding is not None
+
+
 def process_uploaded_files(files, progress=None):  # 增加默认值，更规范
     """处理上传的PDF文件，构建或重建知识库。"""
     if not files:
@@ -137,6 +158,8 @@ def process_uploaded_files(files, progress=None):  # 增加默认值，更规范
     if progress:
         progress(0.8, desc="生成文本嵌入...")
     # --- FIX END ---
+    if not ensure_embeddings_ready():
+        return "嵌入模型未就绪，请稍后重试或检查初始化日志。", file_processor.get_file_list()
     embeddings_np = get_embedding(chunks)
 
     # 4. 构建FAISS索引
@@ -259,6 +282,10 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
     query = initial_query
     all_contexts, all_doc_ids, all_metadata = [], [], []
 
+    if not ensure_embeddings_ready():
+        logging.error("嵌入模型未就绪，无法进行检索。")
+        return all_contexts, all_doc_ids, all_metadata
+
     for i in range(RECURSIVE_RETRIEVAL_MAX_ITERATIONS):
         logging.info(f"递归检索迭代 {i + 1}，查询: {query}")
 
@@ -327,7 +354,7 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
     return all_contexts, all_doc_ids, all_metadata
 
 
-def answer_question_stream(question, enable_web_search, model_choice):
+def answer_question_stream(question, enable_web_search, model_choice, allow_supplement=True):
     """处理问答请求并以流式方式返回答案。"""
     # 检查知识库状态
     if not faiss_manager.faiss_index or faiss_manager.faiss_index.ntotal == 0:
@@ -348,7 +375,66 @@ def answer_question_stream(question, enable_web_search, model_choice):
     if not context_str.strip():
         context_str = "未在本地文档和网络中找到相关信息。"
 
-    prompt = f"""你是一个专业的问答助手。请基于以下提供的参考内容来回答用户的问题。
+    # 2.5 输出调试信息：选择的模型与有效模型
+    model_name_map = {
+        "ollama": GENERATOR_MODEL_OLLAMA,
+        "siliconflow": GENERATOR_MODEL_SILICONFLOW,
+        "deepseek": GENERATOR_MODEL_DEEPSEEK,
+        "aliyun": GENERATOR_MODEL_ALIYUN,
+    }
+    provider_label_map = {
+        "ollama": "本地 Ollama",
+        "siliconflow": "SiliconFlow",
+        "deepseek": "DeepSeek",
+        "aliyun": "阿里云 DashScope",
+    }
+
+    effective_choice = model_choice or "ollama"
+    warn_msg = ""
+    if effective_choice == "siliconflow" and not SILICONFLOW_API_KEY:
+        warn_msg = "（未检测到密钥，将回退至本地Ollama）"
+        effective_choice = "ollama"
+    elif effective_choice == "deepseek" and not DEEPSEEK_API_KEY:
+        warn_msg = "（未检测到密钥，将回退至本地Ollama）"
+        effective_choice = "ollama"
+    elif effective_choice == "aliyun" and not DASHSCOPE_API_KEY:
+        warn_msg = "（未检测到密钥，将回退至本地Ollama）"
+        effective_choice = "ollama"
+
+    chosen_label = provider_label_map.get(model_choice, "本地 Ollama")
+    effective_label = provider_label_map.get(effective_choice, "本地 Ollama")
+    chosen_model_name = model_name_map.get(model_choice, GENERATOR_MODEL_OLLAMA)
+    effective_model_name = model_name_map.get(effective_choice, GENERATOR_MODEL_OLLAMA)
+
+    if warn_msg:
+        yield f"ℹ️ 调试：已选择 {chosen_label}（模型：{chosen_model_name}），但{warn_msg}", "准备中"
+    yield f"🧪 调试：将使用 {effective_label} 进行生成（模型：{effective_model_name}）。", "准备中"
+    # 新增：回答模式调试输出
+    yield f"🧪 调试：回答模式：{'材料+补充' if allow_supplement else '仅材料'}", "准备中"
+
+    # 2.6 组装提示词模板（可选补充）
+    if allow_supplement:
+        prompt = f"""你是一个专业的问答助手。请优先基于以下提供的参考内容回答用户的问题；当参考内容不足以完整回答时，可以补充通用常识或公开知识，但必须明确标注。
+
+回答要求：
+1. 优先引用参考内容，关键陈述后以 [来源] 或 [来源: 文档名] 标注。
+2. 对不来自参考内容的内容，请在句尾标注 [补充]，或在文末单独添加“额外补充”小节。
+3. 如参考与补充存在冲突，以参考为准并指出冲突。
+4. 对不确定的信息使用“可能/约”之类措辞，避免编造精确数据或伪造引用。
+5. 结构清晰、分点作答。
+6. 在回答末尾追加两行：
+   - 来源: [以逗号分隔的文档名列表]
+   - 补充说明: 如有，简述补充的范围或依据（不得虚构链接）。
+
+--- 参考内容 ---
+{context_str}
+---
+用户问题: {question}
+
+你的回答：
+"""
+    else:
+        prompt = f"""你是一个专业的问答助手。请基于以下提供的参考内容来回答用户的问题。
 请遵循以下原则：
 1. 仅根据参考内容回答，不要使用自己的知识。
 2. 如果内容不足，请坦诚告知。
@@ -367,7 +453,7 @@ def answer_question_stream(question, enable_web_search, model_choice):
     yield "🤖 正在生成回答...", "生成中"
     raw_answer = ""
 
-    if model_choice == "siliconflow":
+    if effective_choice == "siliconflow":
         # 对于SiliconFlow，我们需要实现真正的流式输出
         try:
             # 首先尝试流式调用，如果不支持则回退到非流式
@@ -387,6 +473,46 @@ def answer_question_stream(question, enable_web_search, model_choice):
                         yield current_text.strip(), "生成中"
         except Exception as e:
             logging.error(f"SiliconFlow生成失败: {e}")
+            raw_answer = f"抱歉，生成回答时出现错误：{str(e)}"
+            yield raw_answer, "错误"
+            return
+    elif effective_choice == "deepseek":
+        try:
+            response = call_deepseek_api_stream(prompt)
+            if response:
+                for chunk in response:
+                    raw_answer += chunk
+                    yield raw_answer, "生成中"
+            else:
+                raw_answer = call_deepseek_api(prompt)
+                words = raw_answer.split()
+                current_text = ""
+                for i, word in enumerate(words):
+                    current_text += word + " "
+                    if i % 3 == 0 or i == len(words) - 1:
+                        yield current_text.strip(), "生成中"
+        except Exception as e:
+            logging.error(f"DeepSeek 生成失败: {e}")
+            raw_answer = f"抱歉，生成回答时出现错误：{str(e)}"
+            yield raw_answer, "错误"
+            return
+    elif effective_choice == "aliyun":
+        try:
+            response = call_aliyun_api_stream(prompt)
+            if response:
+                for chunk in response:
+                    raw_answer += chunk
+                    yield raw_answer, "生成中"
+            else:
+                raw_answer = call_aliyun_api(prompt)
+                words = raw_answer.split()
+                current_text = ""
+                for i, word in enumerate(words):
+                    current_text += word + " "
+                    if i % 3 == 0 or i == len(words) - 1:
+                        yield current_text.strip(), "生成中"
+        except Exception as e:
+            logging.error(f"阿里云生成失败: {e}")
             raw_answer = f"抱歉，生成回答时出现错误：{str(e)}"
             yield raw_answer, "错误"
             return

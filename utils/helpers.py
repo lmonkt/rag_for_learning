@@ -11,7 +11,9 @@ from config import (
     OLLAMA_CHECK_URL, OLLAMA_TAGS_URL, GENERATOR_MODEL_OLLAMA,
     EMBED_MODEL_NAME, CHUNK_SIZE, CHUNK_OVERLAP, HYBRID_SEARCH_ALPHA,
     CROSS_ENCODER_MODEL_NAME, CONNECTION_TIMEOUT, REQUEST_TIMEOUT,
-    APP_HOST, OLLAMA_EMBED_MODEL
+    APP_HOST, OLLAMA_EMBED_MODEL,
+    # 新增：云端密钥用于放宽环境校验
+    SILICONFLOW_API_KEY, DEEPSEEK_API_KEY, DASHSCOPE_API_KEY
 )
 
 
@@ -30,37 +32,61 @@ def is_port_available(port: int) -> bool:
 
 def check_environment():
     """
-    检查运行环境是否满足基本要求，主要是Ollama服务及其模型。
+    检查运行环境是否满足基本要求：
+    - 优先检测本地 Ollama 服务与主生成模型；
+    - 如果本地不可用，但检测到任一云端密钥（SiliconFlow/DeepSeek/阿里云），则允许以“仅云端模式”继续启动；
+    - 仅当两者都不可用时才阻止启动。
     """
+    cloud_keys_present = any([bool(SILICONFLOW_API_KEY), bool(DEEPSEEK_API_KEY), bool(DASHSCOPE_API_KEY)])
+
     try:
-        # 1. 检查Ollama服务是否在运行
-        response = requests.get(
-            OLLAMA_TAGS_URL.replace("/api/tags", ""),  # 访问根路径
-            proxies={"http": None, "https": None},
-            timeout=CONNECTION_TIMEOUT
-        )
-        if response.status_code != 200:
-            print(f"❌ Ollama服务连接异常，返回状态码: {response.status_code}")
-            print("请确保Ollama服务正在运行。")
-            return False
-        print("✅ Ollama服务连接正常。")
+        # 1) 检查 Ollama 服务（可选）
+        try:
+            response = requests.get(
+                OLLAMA_TAGS_URL.replace("/api/tags", ""),  # 访问根路径
+                proxies={"http": None, "https": None},
+                timeout=CONNECTION_TIMEOUT
+            )
+            ollama_online = (response.status_code == 200)
+        except requests.exceptions.RequestException:
+            ollama_online = False
 
-        # 2. 检查所需模型是否存在
-        model_check_response = requests.post(
-            OLLAMA_CHECK_URL,
-            json={"name": GENERATOR_MODEL_OLLAMA},
-            timeout=REQUEST_TIMEOUT
-        )
-        if model_check_response.status_code != 200:
-            print(f"❌ 未找到所需模型: {GENERATOR_MODEL_OLLAMA}")
-            print(f"请先执行 'ollama pull {GENERATOR_MODEL_OLLAMA}' 来下载模型。")
-            return False
-        print(f"✅ 所需模型 '{GENERATOR_MODEL_OLLAMA}' 已存在。")
+        if ollama_online:
+            print("✅ Ollama服务连接正常。")
+            # 2) 检查所需本地生成模型是否存在（仅作提示，不再强制）
+            try:
+                model_check_response = requests.post(
+                    OLLAMA_CHECK_URL,
+                    json={"name": GENERATOR_MODEL_OLLAMA},
+                    timeout=REQUEST_TIMEOUT,
+                    proxies={"http": None, "https": None}
+                )
+                if model_check_response.status_code == 200:
+                    print(f"✅ 本地生成模型已就绪: {GENERATOR_MODEL_OLLAMA}")
+                else:
+                    print(f"⚠️ 未找到本地生成模型: {GENERATOR_MODEL_OLLAMA}。如选择 'ollama' 可能失败，建议执行 'ollama pull {GENERATOR_MODEL_OLLAMA}'。")
+            except requests.exceptions.RequestException as e:
+                print(f"⚠️ 检查本地生成模型时发生网络错误: {e}。如计划使用本地模型，请确认服务可用。")
 
-        return True
-    except requests.exceptions.RequestException as e:
-        print(f"❌ 连接Ollama服务失败: {e}")
-        print(f"请确认Ollama服务已在 {OLLAMA_CHECK_URL.replace('/api/show', '')} 启动。")
+            # 本地服务在线即视为环境可用
+            return True
+        else:
+            print("⚠️ 未检测到 Ollama 服务在线。")
+            if cloud_keys_present:
+                print("🟨 检测到云端API密钥，将启用‘仅云端模式’，可在UI中选择 SiliconFlow / DeepSeek / 阿里云 进行生成。")
+                return True
+            else:
+                print("❌ 未检测到任何云端API密钥，且本地Ollama不可用。请至少满足以下条件之一：\n"
+                      "  1) 启动Ollama并下载所需本地模型；\n"
+                      "  2) 在环境变量中配置任一云端密钥（SILICONFLOW_API_KEY / DEEPSEEK_API_KEY / DASHSCOPE_API_KEY）。")
+                return False
+
+    except Exception as e:
+        print(f"❌ 环境检查发生异常: {e}")
+        # 若存在云端密钥，仍可放行（容错）
+        if cloud_keys_present:
+            print("🟨 虽然环境检查异常，但检测到云端密钥，将尝试以‘仅云端模式’继续启动。")
+            return True
         return False
 
 
@@ -70,7 +96,7 @@ def is_embedding_model_available(model_name: str = None) -> bool:
     借鉴了 check_environment 函数的风格，使用 /api/show API。
 
     Args:
-        model_name (str): 要检查的嵌入模型名称，如果不指定则使用配置中的默认模型。
+        model_name (str): 要检查的嵌入模型名称，如果不指定则使用配置中的默认嵌入模型。
 
     Returns:
         bool: 如果模型存在则返回 True，否则返回 False。
