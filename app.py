@@ -1,18 +1,22 @@
 # app.py
 import webbrowser
+import logging
 
 # 导入UI创建函数
 from ui import create_ui
 # 导入逻辑层和工具函数
 import logic
 from utils import helpers
-from config import APP_PORT_START, APP_PORT_END, APP_HOST
+from config import APP_PORT_START, APP_PORT_END, APP_HOST, LOGGING_LEVEL, LOGGING_FORMAT
 
 
 def main():
     """
     主程序入口。
     """
+    # 初始化日志（确保 web_search 等模块的调试信息可见）
+    logging.basicConfig(level=getattr(logging, LOGGING_LEVEL, logging.INFO), format=LOGGING_FORMAT)
+
     # 1. 检查环境依赖
     print("🚀 正在启动智能文档问答系统...")
     print("Step 1/4: 检查系统环境...")
