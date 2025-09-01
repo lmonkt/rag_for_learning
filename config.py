@@ -47,6 +47,10 @@ os.environ['HF_ENDPOINT'] = _config["system"]["hf_endpoint"]
 
 # --- Search Engine ---
 SEARCH_ENGINE = _config["search"]["engine"]
+# 新增：搜索提供方（auto/serpapi/bing/google_cse/duckduckgo）
+SEARCH_PROVIDER = _config["search"].get("provider", "auto")
+# 新增：单次搜索的整体超时（秒），用于快速失败
+SEARCH_OVERALL_TIMEOUT = _config["search"].get("overall_timeout", 8)
 
 # --- Rerank Method ---
 RERANK_METHOD = os.getenv("RERANK_METHOD", _config["rerank_method"])
@@ -65,6 +69,15 @@ DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL", _config["endpoints"].get("deeps
 # 阿里云 DashScope 兼容
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 ALIYUN_API_URL = os.getenv("ALIYUN_API_URL", _config["endpoints"].get("aliyun", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"))
+
+# 新增：Bing Web Search（Azure Cognitive Services）
+BING_SEARCH_API_KEY = os.getenv("BING_SEARCH_API_KEY")
+BING_SEARCH_API_URL = os.getenv("BING_SEARCH_API_URL", _config["endpoints"].get("bing", "https://api.bing.microsoft.com/v7.0/search"))
+
+# 新增：Google Custom Search (CSE)
+GOOGLE_CSE_API_KEY = os.getenv("GOOGLE_CSE_API_KEY")
+GOOGLE_CSE_CX = os.getenv("GOOGLE_CSE_CX")
+GOOGLE_CSE_API_URL = os.getenv("GOOGLE_CSE_API_URL", _config["endpoints"].get("google_cse", "https://www.googleapis.com/customsearch/v1"))
 
 # 本地 Ollama
 OLLAMA_API_URL = _config["endpoints"]["ollama_generate"]

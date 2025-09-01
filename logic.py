@@ -13,7 +13,8 @@ from core.reranker import rerank_documents
 from core.llm_interface import call_ollama_api_stream, call_siliconflow_api, call_siliconflow_api_stream, generate_query_variations
 from core.web_search import serpapi_search
 import core.reranker as reranker  # 导入模块以访问get_cross_encoder
-
+# 新增：导入最近一次网络搜索提供方与结果数（用于调试展示）
+from core.web_search import get_last_search_provider, get_last_search_count
 # 新增：导入 DeepSeek 与 阿里云 API
 from core.llm_interface import (
     call_deepseek_api_stream, call_deepseek_api,
@@ -328,9 +329,22 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
         if enable_web_search:
             try:
                 web_results = serpapi_search(query)
-                for res in web_results:
+                for idx, res in enumerate(web_results):
                     # 将网络结果也视为一种上下文
                     text = f"标题：{res.get('title', '')}\n摘要：{res.get('snippet', '')}"
+                # 将网络搜索结果也纳入上下文预算（低优先级地追加）
+                if web_texts:
+                    web_pack = [
+                        (f"web_{j}", {"content": t, "metadata": {"source": "web_search"}})
+                        for j, t in enumerate(web_texts)
+                    ]
+                    _fit_into_budget(
+                        reranked_results=web_pack,
+                        all_contexts=all_contexts,
+                        all_doc_ids=all_doc_ids,
+                        all_metadata=all_metadata,
+                        query=query
+                    )
                     web_texts.append(text)
                     # 为了简单起见，我们不将网络结果加入向量库，只作为当轮的临时上下文
             except Exception as e:
@@ -366,6 +380,13 @@ def answer_question_stream(question, enable_web_search, model_choice, allow_supp
     # 1. 递归检索获取上下文
     yield "🔍 正在搜索相关文档...", "检索中"
     contexts, doc_ids, metadatas = recursive_retrieval(question, enable_web_search, model_choice)
+
+    # 新增：在UI与日志中输出最近一次网络搜索提供方与结果数
+    if enable_web_search:
+        provider = get_last_search_provider() or "none"
+        count = get_last_search_count() or 0
+        logging.info(f"调试：最近一次网络搜索提供方={provider}，结果数={count}")
+        yield f"🧪 调试：网络搜索提供方：{provider}（{count} 条）", "检索中"
 
     # 2. 构建Prompt
     yield "📝 正在构建提示词...", "准备中"
