@@ -6,6 +6,7 @@ import numpy as np
 import ollama
 from sentence_transformers import SentenceTransformer
 import gradio as gr
+from typing import Callable, Optional
 # 导入核心组件
 from core.document_processor import process_files_to_chunks, FileProcessor
 from core.retriever import FaissIndexManager, BM25IndexManager, hybrid_merge
@@ -41,7 +42,66 @@ file_processor = FileProcessor()
 faiss_manager = FaissIndexManager()
 bm25_manager = BM25IndexManager()
 embed_model = None
-get_embedding: None = None
+get_embedding: Optional[Callable[[list[str] | str], np.ndarray]] = None
+
+
+# --- 新增：对外暴露的知识库管理 API ---
+def _rebuild_bm25():
+    docs_for_bm25, ids_for_bm25 = faiss_manager.get_all_docs_and_ids()
+    bm25_manager.build_index(docs_for_bm25, ids_for_bm25)
+
+
+def add_chunks(chunks: list[str], metadatas: list[dict], original_ids: list[str]) -> int:
+    """添加若干文本块到向量库与BM25。
+    - 自动编码嵌入
+    - 成功后重建BM25
+    返回成功添加的数量。
+    """
+    if not chunks or not original_ids:
+        return 0
+    if not ensure_embeddings_ready():
+        logging.error("嵌入模型未就绪，无法添加chunks。")
+        return 0
+    assert get_embedding is not None, "嵌入函数未初始化"
+    embeddings_np = get_embedding(chunks)
+    added = faiss_manager.add_items(embeddings_np, chunks, metadatas or [{}] * len(chunks), original_ids)
+    _rebuild_bm25()
+    return int(added)
+
+
+def remove_chunks(original_ids: list[str]) -> int:
+    """按 original_id 移除若干文本块，并同步更新BM25。"""
+    removed = faiss_manager.remove_items(original_ids or [])
+    _rebuild_bm25()
+    return int(removed)
+
+
+def update_chunks(chunks: list[str], metadatas: list[dict], original_ids: list[str]) -> int:
+    """更新若干文本块（内容与/或元数据）。实现为 remove+add，保持相同ID。"""
+    if not chunks or not original_ids:
+        return 0
+    if not ensure_embeddings_ready():
+        logging.error("嵌入模型未就绪，无法更新chunks。")
+        return 0
+    assert get_embedding is not None, "嵌入函数未初始化"
+    embeddings_np = get_embedding(chunks)
+    updated = faiss_manager.update_items(embeddings_np, chunks, metadatas or [{}] * len(chunks), original_ids)
+    _rebuild_bm25()
+    return int(updated)
+
+
+def list_chunks(limit: int | None = None) -> list[dict]:
+    """列出当前知识库中的文本块（供UI渲染）。"""
+    items = []
+    for oid, content in faiss_manager.faiss_contents_map.items():
+        items.append({
+            'id': oid,
+            'content': content,
+            'metadata': faiss_manager.faiss_metadatas_map.get(oid, {})
+        })
+    if limit is not None and limit > 0:
+        return items[:limit]
+    return items
 
 
 def initialize_models():
@@ -161,6 +221,7 @@ def process_uploaded_files(files, progress=None):  # 增加默认值，更规范
     # --- FIX END ---
     if not ensure_embeddings_ready():
         return "嵌入模型未就绪，请稍后重试或检查初始化日志。", file_processor.get_file_list()
+    assert get_embedding is not None, "嵌入函数未初始化"
     embeddings_np = get_embedding(chunks)
 
     # 4. 构建FAISS索引
@@ -292,6 +353,7 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
 
         # 1. 语义检索 (FAISS)
         logging.info("步骤 1/5: 执行向量编码和FAISS搜索...")
+        assert get_embedding is not None, "嵌入函数未初始化"
         query_embedding_np=get_embedding([query])
         semantic_results = faiss_manager.search(query_embedding_np, top_k=RETRIEVER_TOP_K)
         logging.info("FAISS搜索完成。")
@@ -332,6 +394,7 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
                 for idx, res in enumerate(web_results):
                     # 将网络结果也视为一种上下文
                     text = f"标题：{res.get('title', '')}\n摘要：{res.get('snippet', '')}"
+                    web_texts.append(text)
                 # 将网络搜索结果也纳入上下文预算（低优先级地追加）
                 if web_texts:
                     web_pack = [
@@ -345,7 +408,6 @@ def recursive_retrieval(initial_query, enable_web_search, model_choice):
                         all_metadata=all_metadata,
                         query=query
                     )
-                    web_texts.append(text)
                     # 为了简单起见，我们不将网络结果加入向量库，只作为当轮的临时上下文
             except Exception as e:
                 logging.error(f"网络搜索错误: {e}")

@@ -2,6 +2,7 @@
 import logging
 
 import gradio as gr
+import json
 
 # 导入业务逻辑函数，UI的交互将调用这些函数
 import logic
@@ -62,7 +63,7 @@ def get_document_chunks_for_ui(progress=None):
 
     # 关键改动：我们不再使用全局变量，而是通过 logic 模块访问已封装好的 faiss_manager
     faiss_manager = logic.faiss_manager
-    if not faiss_manager.faiss_id_order_for_index:
+    if not getattr(faiss_manager, 'faiss_id_order_for_index', []):
         chunk_data_cache = []
         return [], "知识库中没有文档，请先上传并处理文档。"
 
@@ -80,6 +81,7 @@ def get_document_chunks_for_ui(progress=None):
             doc_groups[source] = []
 
         chunk_info = {
+            "id": doc_id,
             "content": doc,
             "char_count": len(doc)
         }
@@ -91,20 +93,23 @@ def get_document_chunks_for_ui(progress=None):
 
     for source, chunks in doc_groups.items():
         for i, chunk in enumerate(chunks):
+            preview = chunk["content"][:200] + "..." if len(chunk["content"]) > 200 else chunk["content"]
             # 添加到缓存
             result_for_cache.append({
+                "ID": chunk["id"],
                 "来源": source,
                 "序号": f"{i + 1}/{len(chunks)}",
                 "字符数": chunk["char_count"],
-                "内容预览": chunk["content"][:200] + "..." if len(chunk["content"]) > 200 else chunk["content"],
+                "内容预览": preview,
                 "完整内容": chunk["content"]
             })
             # 添加到Dataframe的显示列表
             result_for_df.append([
+                chunk["id"],
                 source,
                 f"{i + 1}/{len(chunks)}",
                 chunk["char_count"],
-                chunk["content"][:200] + "..." if len(chunk["content"]) > 200 else chunk["content"],
+                preview,
             ])
 
     chunk_data_cache = result_for_cache
@@ -125,6 +130,64 @@ def show_chunk_details(evt: gr.SelectData):
         selected_chunk = chunk_data_cache[evt.index[0]]
         return selected_chunk.get("完整内容", "内容加载失败")
     return "未找到选中的分块"
+
+
+def _parse_metadata_json(meta_text: str) -> dict:
+    if not meta_text or not str(meta_text).strip():
+        return {}
+    try:
+        return json.loads(meta_text)
+    except Exception:
+        return {}
+
+
+def add_chunk_for_ui(original_id: str, content: str, metadata_json: str):
+    original_id = (original_id or "").strip()
+    content = (content or "").strip()
+    if not original_id or not content:
+        df, _ = get_document_chunks_for_ui()
+        return df, "❌ 请输入有效的ID与内容后再添加。"
+    meta = _parse_metadata_json(metadata_json)
+    try:
+        added = logic.add_chunks([content], [meta], [original_id])
+        df, summary = get_document_chunks_for_ui()
+        return df, f"✅ 添加完成：{added} 个。" + (" " + summary if summary else "")
+    except Exception as e:
+        df, _ = get_document_chunks_for_ui()
+        return df, f"❌ 添加失败：{e}"
+
+
+def update_chunk_for_ui(original_id: str, content: str, metadata_json: str):
+    original_id = (original_id or "").strip()
+    content = (content or "").strip()
+    if not original_id or not content:
+        df, _ = get_document_chunks_for_ui()
+        return df, "❌ 请输入有效的ID与内容后再更新。"
+    meta = _parse_metadata_json(metadata_json)
+    try:
+        updated = logic.update_chunks([content], [meta], [original_id])
+        df, summary = get_document_chunks_for_ui()
+        return df, f"✅ 更新完成：{updated} 个。" + (" " + summary if summary else "")
+    except Exception as e:
+        df, _ = get_document_chunks_for_ui()
+        return df, f"❌ 更新失败：{e}"
+
+
+def remove_chunks_for_ui(original_ids_text: str):
+    text = (original_ids_text or "").strip()
+    if not text:
+        df, _ = get_document_chunks_for_ui()
+        return df, "❌ 请输入要删除的ID（可用逗号/空格/换行分隔）。"
+    # 支持逗号、空格、换行分隔
+    parts = [p.strip() for p in re.split(r"[\s,]+", text) if p.strip()] if 're' in globals() else [p.strip() for p in text.replace('\n', ',').replace(' ', ',').split(',') if p.strip()]
+    try:
+        removed = logic.remove_chunks(parts)
+        df, summary = get_document_chunks_for_ui()
+        return df, f"✅ 删除完成：{removed} 个。" + (" " + summary if summary else "")
+    except Exception as e:
+        df, _ = get_document_chunks_for_ui()
+        return df, f"❌ 删除失败：{e}"
+
 
 def get_system_info_for_ui():
     """
@@ -515,11 +578,11 @@ def create_ui():
                         gr.Markdown("<div class='footer-note'>*回答生成可能需要一些时间，请耐心等待。</div>")
 
             # --- 分块可视化 Tab ---
-            with gr.TabItem("📊 分块可视化"):
+            with gr.TabItem("📊 分块与管理"):
                 with gr.Column():
-                    gr.Markdown("## 📄 文档分块检视")
+                    gr.Markdown("## 📄 文档分块检视与管理")
                     gr.Markdown(
-                        "在这里，你可以查看上传文档后，文本被切分成的所有小块（Chunks）。这有助于理解RAG系统检索的资料来源。")
+                        "在这里，你可以查看上传文档后，文本被切分成的所有小块（Chunks），并进行添加、删除、更新。")
 
                     with gr.Row():
                         refresh_chunks_btn = gr.Button("🔄 刷新分块数据", variant="primary")
@@ -528,8 +591,8 @@ def create_ui():
 
                     # 用于显示分块数据的表格
                     chunks_data = gr.Dataframe(
-                        headers=["来源文档", "分块序号", "字符数", "内容预览"],
-                        datatype=["str", "str", "number", "str"],
+                        headers=["ID", "来源文档", "分块序号", "字符数", "内容预览"],
+                        datatype=["str", "str", "str", "number", "str"],
                         row_count=(10, "dynamic"),
                         wrap=True
                     )
@@ -542,6 +605,16 @@ def create_ui():
                         interactive=False,
                         show_copy_button=True
                     )
+
+                    with gr.Accordion("✏️ 管理与编辑（单条）", open=False):
+                        with gr.Row():
+                            m_id = gr.Textbox(label="原始ID（支持删除时填写多个，逗号/空格/换行分隔）", placeholder="如 doc1_p3_c5")
+                        m_content = gr.Textbox(label="内容（添加/更新时必填）", lines=6)
+                        m_meta = gr.Textbox(label="元数据 JSON（可留空）", lines=4, placeholder='例如: {"source": "doc1.pdf", "page": 3}')
+                        with gr.Row():
+                            add_btn2 = gr.Button("➕ 添加", variant="primary")
+                            update_btn2 = gr.Button("✏️ 更新", variant="secondary")
+                            remove_btn2 = gr.Button("🗑️ 删除", variant="secondary")
 
             # --- 新增：系统信息 Tab ---
             with gr.TabItem("📈 系统信息"):
@@ -644,6 +717,23 @@ def create_ui():
             fn=show_chunk_details,
             inputs=[],  # `select` 事件会自动传递一个 `SelectData` 对象
             outputs=[chunk_detail_text]
+        )
+
+        # 6. 管理与编辑按钮
+        add_btn2.click(
+            fn=add_chunk_for_ui,
+            inputs=[m_id, m_content, m_meta],
+            outputs=[chunks_data, chunks_status]
+        )
+        update_btn2.click(
+            fn=update_chunk_for_ui,
+            inputs=[m_id, m_content, m_meta],
+            outputs=[chunks_data, chunks_status]
+        )
+        remove_btn2.click(
+            fn=remove_chunks_for_ui,
+            inputs=[m_id],
+            outputs=[chunks_data, chunks_status]
         )
 
         # 新增：系统信息刷新事件
